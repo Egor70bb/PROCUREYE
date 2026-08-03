@@ -1,0 +1,8 @@
+streamlit>=1.60
+plotly>=6
+pandas>=2
+numpy>=2
+yfinance>=0.2
+feedparser>=6
+requests
+pyngrok
