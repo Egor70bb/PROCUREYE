@@ -1,16 +1,11 @@
 # PROCUREYE
 
-Crude Oil Market Intelligence Platform
+Crude Oil Market Intelligence Platform.
 
-## Features
+## Release 40.0 MVP
 
-- Brent Intelligence
-- WTI Intelligence
-- Market Score
-- Explainable AI
-- Executive Dashboard
-- Historical Memory
-- News Intelligence
-- LONG / SHORT / WAIT decision support
+Run with:
 
-Release 39
+    streamlit run app.py
+
+Decision support only. No order execution.

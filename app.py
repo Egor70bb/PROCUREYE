@@ -1,3 +1,630 @@
+# PROCUREYE RELEASE 40.1 — STANDALONE PRODUCTION
+
+# ============================================================
+# EMBEDDED MODULE: professional_chart.py
+# ============================================================
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+
+def render_professional_chart(df, title, symbol):
+    if df is None or df.empty:
+        st.warning(f"{title}: dati non disponibili.")
+        return
+
+    data = df.copy()
+    data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+    data["Close"] = pd.to_numeric(data["Close"], errors="coerce")
+    data = data.dropna(subset=["Date", "Close"]).sort_values("Date")
+
+    if data.empty:
+        st.warning(f"{title}: dati non validi.")
+        return
+
+    data["MA20"] = data["Close"].rolling(20).mean()
+    data["MA50"] = data["Close"].rolling(50).mean()
+
+    last_price = float(data["Close"].iloc[-1])
+    period_high = float(data["Close"].max())
+    period_low = float(data["Close"].min())
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=data["Date"],
+        y=data["Close"],
+        mode="lines",
+        name=symbol,
+        line=dict(width=2.5),
+        hovertemplate="%{x|%d %b %Y}<br>Close: $%{y:.2f}<extra></extra>"
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=data["Date"],
+        y=data["MA20"],
+        mode="lines",
+        name="MA 20",
+        line=dict(width=1.3, dash="dot"),
+        hovertemplate="MA20: $%{y:.2f}<extra></extra>"
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=data["Date"],
+        y=data["MA50"],
+        mode="lines",
+        name="MA 50",
+        line=dict(width=1.3, dash="dash"),
+        hovertemplate="MA50: $%{y:.2f}<extra></extra>"
+    ))
+
+    fig.add_hline(
+        y=last_price,
+        line_width=1,
+        line_dash="dot",
+        annotation_text=f"Last ${last_price:.2f}",
+        annotation_position="top right"
+    )
+
+    fig.update_layout(
+        title=dict(
+            text=(
+                f"{title}"
+                f"<br><sup>High ${period_high:.2f} · "
+                f"Low ${period_low:.2f} · Last ${last_price:.2f}</sup>"
+            ),
+            x=0.02
+        ),
+        height=470,
+        margin=dict(l=20, r=20, t=85, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#dceaf1"),
+        hovermode="x unified",
+        dragmode="zoom",
+        legend=dict(
+            orientation="h",
+            y=1.03,
+            x=1,
+            xanchor="right"
+        ),
+        xaxis=dict(
+            gridcolor="rgba(140,180,205,.10)",
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+            spikedash="dot",
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label="1M", step="month", stepmode="backward"),
+                    dict(count=3, label="3M", step="month", stepmode="backward"),
+                    dict(count=6, label="6M", step="month", stepmode="backward"),
+                    dict(count=1, label="YTD", step="year", stepmode="todate"),
+                    dict(count=1, label="1Y", step="year", stepmode="backward"),
+                    dict(label="ALL", step="all")
+                ]
+            )
+        ),
+        yaxis=dict(
+            title="USD per barrel",
+            gridcolor="rgba(140,180,205,.10)",
+            showspikes=True,
+            spikedash="dot",
+            fixedrange=False
+        )
+    )
+
+    st.plotly_chart(
+        fig,
+        width="stretch",
+        config={
+            "displaylogo": False,
+            "scrollZoom": True,
+            "responsive": True,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d"]
+        },
+        key=f"professional_{symbol.lower()}"
+    )
+
+
+# ============================================================
+# EMBEDDED MODULE: market_movers.py
+# ============================================================
+
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from urllib.parse import quote_plus
+
+import feedparser
+import pandas as pd
+import requests
+import streamlit as st
+
+
+FEEDS = [
+    (
+        "Oil Market",
+        "https://news.google.com/rss/search?q="
+        + quote_plus("crude oil Brent WTI when:2d")
+        + "&hl=en-US&gl=US&ceid=US:en"
+    ),
+    (
+        "OPEC",
+        "https://news.google.com/rss/search?q="
+        + quote_plus("OPEC oil production cuts when:3d")
+        + "&hl=en-US&gl=US&ceid=US:en"
+    ),
+    (
+        "Inventories",
+        "https://news.google.com/rss/search?q="
+        + quote_plus("EIA API US crude oil inventories when:3d")
+        + "&hl=en-US&gl=US&ceid=US:en"
+    ),
+    (
+        "Geopolitics",
+        "https://news.google.com/rss/search?q="
+        + quote_plus("Middle East oil supply sanctions Iran Russia when:3d")
+        + "&hl=en-US&gl=US&ceid=US:en"
+    ),
+    (
+        "EIA",
+        "https://www.eia.gov/rss/todayinenergy.xml"
+    ),
+]
+
+
+OIL_TERMS = {
+    "oil": 12, "crude": 14, "brent": 18, "wti": 18,
+    "opec": 18, "eia": 12, "api": 10, "barrel": 9,
+    "inventory": 13, "inventories": 13, "refinery": 8,
+    "production": 10, "supply": 9, "demand": 9,
+    "sanction": 10, "pipeline": 8, "tanker": 8,
+    "middle east": 12, "iran": 10, "russia": 9
+}
+
+BULLISH_TERMS = {
+    "production cut": 20, "output cut": 20, "supply disruption": 18,
+    "inventory draw": 18, "inventories fall": 17,
+    "sanctions": 11, "attack": 13, "escalation": 12,
+    "demand rises": 13, "demand growth": 11,
+    "pipeline outage": 18, "export halt": 18
+}
+
+BEARISH_TERMS = {
+    "production increase": 18, "output increase": 18,
+    "inventory build": 18, "inventories rise": 17,
+    "demand falls": 15, "demand slowdown": 14,
+    "ceasefire": 9, "oversupply": 17,
+    "weak demand": 15, "recession": 11,
+    "exports resume": 14, "supply increases": 14
+}
+
+SOURCE_BONUS = {
+    "reuters": 18, "bloomberg": 17, "eia": 18,
+    "opec": 17, "iea": 17, "financial times": 14,
+    "wall street journal": 14, "cnbc": 11,
+    "associated press": 10
+}
+
+
+def _published(entry):
+    raw = entry.get("published") or entry.get("updated") or ""
+
+    try:
+        value = parsedate_to_datetime(raw)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _source(entry, feed_name):
+    source = entry.get("source", {})
+    if isinstance(source, dict) and source.get("title"):
+        return str(source["title"])
+
+    title = str(entry.get("title", ""))
+    if " - " in title:
+        return title.rsplit(" - ", 1)[-1].strip()
+
+    return feed_name
+
+
+def _clean_title(title, source):
+    title = str(title).strip()
+    suffix = f" - {source}"
+
+    if title.lower().endswith(suffix.lower()):
+        title = title[:-len(suffix)].strip()
+
+    return title
+
+
+def _score(title, summary, source, published):
+    text = f"{title} {summary}".lower()
+
+    relevance = sum(
+        weight for term, weight in OIL_TERMS.items()
+        if term in text
+    )
+
+    bullish = sum(
+        weight for term, weight in BULLISH_TERMS.items()
+        if term in text
+    )
+
+    bearish = sum(
+        weight for term, weight in BEARISH_TERMS.items()
+        if term in text
+    )
+
+    source_score = sum(
+        weight for term, weight in SOURCE_BONUS.items()
+        if term in source.lower()
+    )
+
+    age_hours = max(
+        0,
+        (datetime.now(timezone.utc) - published).total_seconds() / 3600
+    )
+
+    freshness = max(0, 20 - age_hours / 3)
+    importance = min(100, relevance + max(bullish, bearish) + source_score + freshness)
+
+    if bullish > bearish:
+        bias = "BULLISH"
+        signed_impact = round(importance, 1)
+    elif bearish > bullish:
+        bias = "BEARISH"
+        signed_impact = round(-importance, 1)
+    else:
+        bias = "NEUTRAL"
+        signed_impact = 0.0
+
+    confidence = min(
+        95,
+        int(45 + relevance / 2 + abs(bullish - bearish) + source_score / 2)
+    )
+
+    return importance, signed_impact, bias, confidence
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_market_movers(limit=3):
+    rows = []
+    headers = {"User-Agent": "Mozilla/5.0 PROCUREYE/39.4"}
+
+    for feed_name, url in FEEDS:
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
+        except Exception:
+            continue
+
+        for entry in feed.entries[:25]:
+            source = _source(entry, feed_name)
+            title = _clean_title(entry.get("title", ""), source)
+            summary = str(entry.get("summary", ""))
+            published = _published(entry)
+            link = str(entry.get("link", "")).strip()
+
+            if not title or not link:
+                continue
+
+            importance, impact, bias, confidence = _score(
+                title, summary, source, published
+            )
+
+            if importance < 18:
+                continue
+
+            rows.append({
+                "Title": title,
+                "Source": source,
+                "PublishedUTC": published,
+                "Published": published.strftime("%d %b %Y · %H:%M UTC"),
+                "Bias": bias,
+                "Impact": impact,
+                "Importance": round(importance, 1),
+                "Confidence": confidence,
+                "URL": link
+            })
+
+    if not rows:
+        return pd.DataFrame([{
+            "Title": "Live market news temporarily unavailable",
+            "Source": "PROCUREYE",
+            "PublishedUTC": datetime.now(timezone.utc),
+            "Published": datetime.now(timezone.utc).strftime(
+                "%d %b %Y · %H:%M UTC"
+            ),
+            "Bias": "NEUTRAL",
+            "Impact": 0.0,
+            "Importance": 0.0,
+            "Confidence": 0,
+            "URL": ""
+        }])
+
+    frame = pd.DataFrame(rows)
+    frame["Dedup"] = (
+        frame["Title"]
+        .str.lower()
+        .str.replace(r"[^a-z0-9 ]", "", regex=True)
+        .str.split()
+        .str[:10]
+        .str.join(" ")
+    )
+
+    frame = (
+        frame.sort_values(
+            ["Importance", "PublishedUTC"],
+            ascending=[False, False]
+        )
+        .drop_duplicates("Dedup")
+        .head(limit)
+        .drop(columns=["Dedup"])
+        .reset_index(drop=True)
+    )
+
+    return frame
+
+
+# ============================================================
+# EMBEDDED MODULE: market_drivers.py
+# ============================================================
+
+import pandas as pd
+
+
+def build_market_drivers(brent, wti, news, risk):
+    rows = []
+
+    def add(name, direction, strength, evidence):
+        rows.append({
+            "Driver": name,
+            "Direction": direction,
+            "Strength": int(max(0, min(100, strength))),
+            "Evidence": evidence
+        })
+
+    add(
+        "Brent Trend",
+        brent["trend"],
+        abs(brent["momentum"]) * 10 + 40,
+        f"10-day momentum {brent['momentum']:+.2f}%"
+    )
+
+    add(
+        "WTI Trend",
+        wti["trend"],
+        abs(wti["momentum"]) * 10 + 40,
+        f"10-day momentum {wti['momentum']:+.2f}%"
+    )
+
+    groups = {
+        "OPEC / Production": ["opec", "production", "output", "cut"],
+        "US Inventories": ["inventory", "inventories", "eia", "api"],
+        "Geopolitics": ["iran", "russia", "middle east", "sanction", "attack"],
+        "Global Demand": ["demand", "china", "economy", "recession"],
+        "Dollar / Fed": ["dollar", "fed", "rates", "interest"]
+    }
+
+    if news is not None and not news.empty:
+        for driver, terms in groups.items():
+            selected = news[
+                news["Title"].astype(str).str.lower().apply(
+                    lambda title: any(term in title for term in terms)
+                )
+            ]
+
+            if selected.empty:
+                add(driver, "NEUTRAL", 20, "No dominant live evidence")
+                continue
+
+            impact = float(selected["Impact"].sum())
+
+            direction = (
+                "BULLISH" if impact > 0
+                else "BEARISH" if impact < 0
+                else "NEUTRAL"
+            )
+
+            add(
+                driver,
+                direction,
+                abs(impact),
+                f"{len(selected)} relevant market-moving item(s)"
+            )
+    else:
+        for driver in groups:
+            add(driver, "NEUTRAL", 20, "Live news unavailable")
+
+    volatility = max(brent["volatility"], wti["volatility"])
+
+    add(
+        "Volatility",
+        risk,
+        volatility,
+        f"{volatility:.1f}% annualized"
+    )
+
+    return pd.DataFrame(rows)
+
+
+# ============================================================
+# EMBEDDED MODULE: why_signal.py
+# ============================================================
+
+def build_why_signal(signal, score, confidence, risk, regime, brent, wti, news):
+    reasons = []
+
+    reasons.append(
+        "Brent trades above its 20-day moving average."
+        if brent["trend"] == "BULLISH"
+        else "Brent trades below its 20-day moving average."
+    )
+
+    reasons.append(
+        "WTI trend is bullish."
+        if wti["trend"] == "BULLISH"
+        else "WTI trend is bearish."
+    )
+
+    reasons.append(
+        f"Brent 10-day momentum is "
+        f"{'positive' if brent['momentum'] > 0 else 'negative'} "
+        f"at {brent['momentum']:+.2f}%."
+    )
+
+    reasons.append(
+        "Market volatility is elevated."
+        if risk == "HIGH"
+        else "Market volatility is moderate."
+        if risk == "MEDIUM"
+        else "Market volatility is contained."
+    )
+
+    if news is not None and not news.empty:
+        bullish = int((news["Bias"] == "BULLISH").sum())
+        bearish = int((news["Bias"] == "BEARISH").sum())
+
+        if bullish > bearish:
+            reasons.append("News flow is predominantly bullish.")
+        elif bearish > bullish:
+            reasons.append("News flow is predominantly bearish.")
+        else:
+            reasons.append("News flow is mixed or neutral.")
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+    )
+
+    if "LONG" in str(signal):
+        action = "Current evidence favours upward oil exposure."
+    elif "SHORT" in str(signal):
+        action = "Current evidence favours downward oil exposure."
+    else:
+        action = "Wait for stronger directional confirmation before acting."
+
+    return {
+        "title": f"Why {clean_signal}?",
+        "score": score,
+        "confidence": confidence,
+        "regime": regime,
+        "reasons": reasons,
+        "action": action
+    }
+
+
+# ============================================================
+# EMBEDDED MODULE: market_delta.py
+# ============================================================
+
+import json
+from pathlib import Path
+import streamlit as st
+
+FILE=Path("data/last_snapshot.json")
+
+def render_market_delta(brent,wti,signal,score,confidence):
+
+    FILE.parent.mkdir(exist_ok=True)
+
+    cur={
+        "brent":float(brent["price"]),
+        "wti":float(wti["price"]),
+        "signal":str(signal),
+        "score":int(score),
+        "confidence":str(confidence)
+    }
+
+    if FILE.exists():
+
+        old=json.loads(FILE.read_text())
+
+        st.markdown("### 📈 Since Last Refresh")
+
+        a,b,c,d,e=st.columns(5)
+
+        a.metric("Brent",
+                 f"${cur['brent']:.2f}",
+                 f"{cur['brent']-old['brent']:+.2f}")
+
+        b.metric("WTI",
+                 f"${cur['wti']:.2f}",
+                 f"{cur['wti']-old['wti']:+.2f}")
+
+        c.metric("Signal",
+                 cur["signal"],
+                 old["signal"])
+
+        d.metric("Score",
+                 cur["score"],
+                 cur["score"]-old["score"])
+
+        e.metric("Confidence",
+                 cur["confidence"],
+                 old["confidence"])
+
+    FILE.write_text(json.dumps(cur,indent=2))
+
+
+# ============================================================
+# EMBEDDED MODULE: system_health.py
+# ============================================================
+
+from datetime import datetime, timezone
+import streamlit as st
+
+def render_system_health():
+
+    now = datetime.now(timezone.utc)
+
+    st.markdown("### 🟢 System Health")
+
+    c1,c2,c3 = st.columns(3)
+
+    with c1:
+        st.metric(
+            "Last Update",
+            now.strftime("%H:%M UTC")
+        )
+
+    with c2:
+        st.metric(
+            "Data Age",
+            "0 min"
+        )
+
+    with c3:
+        if st.button("🔄 Refresh Now"):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.divider()
+
+    a,b,c = st.columns(3)
+
+    with a:
+        st.success("Yahoo Finance")
+
+    with b:
+        st.success("Market Movers")
+
+    with c:
+        st.success("Signal Engine")
+
+
+# ============================================================
+# MAIN APPLICATION
+# ============================================================
 
 import streamlit as st
 import pandas as pd
@@ -5,6 +632,10 @@ import plotly.graph_objects as go
 from pathlib import Path
 from datetime import datetime, timezone
 import inspect
+
+
+
+
 
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
@@ -142,7 +773,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 39 · Product Engineering</div>
+    <div class="pe-release">Release 40.1 · Production MVP</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -165,31 +796,127 @@ def section(title, subtitle):
         unsafe_allow_html=True
     )
 
+
 def load_price_series(csv_name, ticker):
-    path = Path("/content") / csv_name
+    local_paths = [
+        Path("/content") / csv_name,
+        Path(__file__).resolve().parent / csv_name,
+        Path(__file__).resolve().parent / "data" / csv_name,
+    ]
 
-    if path.exists():
-        df = pd.read_csv(path)
+    for path in local_paths:
+        if not path.exists():
+            continue
 
-        date_col = next(
-            (c for c in df.columns if c.lower() in {"date","datetime","timestamp"}),
-            df.columns[0]
-        )
+        try:
+            df = pd.read_csv(path)
 
-        close_col = next(
-            (c for c in df.columns if c.lower() in {"close","adj close","price"}),
-            None
-        )
+            date_col = next(
+                (
+                    c for c in df.columns
+                    if c.lower() in {"date", "datetime", "timestamp"}
+                ),
+                df.columns[0]
+            )
 
-        if close_col:
-            result = df[[date_col, close_col]].copy()
-            result.columns = ["Date", "Close"]
-            result["Date"] = pd.to_datetime(result["Date"], errors="coerce")
-            result["Close"] = pd.to_numeric(result["Close"], errors="coerce")
-            result = result.dropna().sort_values("Date")
+            close_col = next(
+                (
+                    c for c in df.columns
+                    if c.lower() in {"close", "adj close", "price"}
+                ),
+                None
+            )
 
-            if not result.empty:
-                return result
+            if close_col:
+                result = df[[date_col, close_col]].copy()
+                result.columns = ["Date", "Close"]
+                result["Date"] = pd.to_datetime(
+                    result["Date"],
+                    errors="coerce"
+                )
+                result["Close"] = pd.to_numeric(
+                    result["Close"],
+                    errors="coerce"
+                )
+                result = result.dropna().sort_values("Date")
+
+                if not result.empty:
+                    return result
+
+        except Exception:
+            pass
+
+    try:
+        import requests
+        from urllib.parse import quote
+
+        symbol = quote(ticker, safe="")
+        urls = [
+            (
+                "https://query1.finance.yahoo.com/v8/finance/chart/"
+                f"{symbol}?range=6mo&interval=1d"
+            ),
+            (
+                "https://query2.finance.yahoo.com/v8/finance/chart/"
+                f"{symbol}?range=6mo&interval=1d"
+            ),
+        ]
+
+        for url in urls:
+            try:
+                response = requests.get(
+                    url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+                        ),
+                        "Accept": "application/json",
+                    },
+                    timeout=20
+                )
+                response.raise_for_status()
+
+                payload = response.json()
+                chart_result = payload.get("chart", {}).get("result")
+
+                if not chart_result:
+                    continue
+
+                item = chart_result[0]
+                timestamps = item.get("timestamp", [])
+                closes = (
+                    item.get("indicators", {})
+                    .get("quote", [{}])[0]
+                    .get("close", [])
+                )
+
+                if not timestamps or not closes:
+                    continue
+
+                length = min(len(timestamps), len(closes))
+
+                frame = pd.DataFrame({
+                    "Date": pd.to_datetime(
+                        timestamps[:length],
+                        unit="s",
+                        utc=True,
+                        errors="coerce"
+                    ).tz_localize(None),
+                    "Close": pd.to_numeric(
+                        closes[:length],
+                        errors="coerce"
+                    )
+                }).dropna().sort_values("Date")
+
+                if not frame.empty:
+                    return frame
+
+            except Exception:
+                continue
+
+    except Exception:
+        pass
 
     try:
         import yfinance as yf
@@ -199,24 +926,36 @@ def load_price_series(csv_name, ticker):
             period="6mo",
             interval="1d",
             progress=False,
-            auto_adjust=False
+            auto_adjust=False,
+            threads=False,
+            timeout=20
         )
 
-        if not result.empty:
+        if result is not None and not result.empty:
             if isinstance(result.columns, pd.MultiIndex):
                 close = result["Close"].iloc[:, 0]
             else:
                 close = result["Close"]
 
-            return pd.DataFrame({
-                "Date": pd.to_datetime(close.index),
-                "Close": pd.to_numeric(close.values, errors="coerce")
-            }).dropna()
+            frame = pd.DataFrame({
+                "Date": pd.to_datetime(
+                    close.index,
+                    errors="coerce"
+                ),
+                "Close": pd.to_numeric(
+                    close.to_numpy(),
+                    errors="coerce"
+                )
+            }).dropna().sort_values("Date")
+
+            if not frame.empty:
+                return frame
 
     except Exception:
         pass
 
     return pd.DataFrame(columns=["Date", "Close"])
+
 
 @st.cache_data(ttl=900)
 def get_market_data():
@@ -428,6 +1167,17 @@ risk = "HIGH" if max(brent["volatility"], wti["volatility"]) >= 45 else "MEDIUM"
 regime = engine_result.get("components", {}).get("regime", "TRANSITION") if isinstance(engine_result, dict) else "TRANSITION"
 
 section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+render_system_health()
+
+render_market_delta(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence
+)
+
+
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 
@@ -462,83 +1212,123 @@ section("Market Intelligence", "Brent and WTI interactive history")
 left, right = st.columns(2, gap="large")
 
 with left:
-    chart(brent_df, "Brent Crude Oil")
+    render_professional_chart(brent_df, "Brent Crude Oil", "BRENT")
 
 with right:
-    chart(wti_df, "WTI Crude Oil")
+    render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
+
 
 section("Why This Signal?", "Automatic explainable decision summary")
 
-reasons = []
+_why_news = get_market_movers(limit=3)
 
-if brent["trend"] == "BULLISH":
-    reasons.append("Brent trades above its 20-day average.")
-else:
-    reasons.append("Brent trades below its 20-day average.")
-
-if wti["trend"] == "BULLISH":
-    reasons.append("WTI trend is positive.")
-else:
-    reasons.append("WTI trend remains weak.")
-
-if brent["momentum"] > 0:
-    reasons.append(f"Brent 10-day momentum is positive at {brent['momentum']:+.2f}%.")
-else:
-    reasons.append(f"Brent 10-day momentum is negative at {brent['momentum']:+.2f}%.")
-
-reasons.append(
-    f"Annualized market volatility is approximately "
-    f"{max(brent['volatility'], wti['volatility']):.1f}%."
+why = build_why_signal(
+    signal=signal,
+    score=score,
+    confidence=confidence,
+    risk=risk,
+    regime=regime,
+    brent=brent,
+    wti=wti,
+    news=_why_news
 )
 
-st.info(" ".join(reasons))
+st.subheader(why["title"])
 
-d1, d2, d3, d4 = st.columns(4)
+for reason in why["reasons"]:
+    st.write(f"✓ {reason}")
 
-with d1:
-    st.metric("Market Regime", regime)
+st.info(why["action"])
 
-with d2:
-    st.metric("Brent Trend", brent["trend"])
+w1, w2, w3 = st.columns(3)
 
-with d3:
-    st.metric("WTI Trend", wti["trend"])
+with w1:
+    st.metric("Market Score", f"{why['score']}/100")
 
-with d4:
-    st.metric(
-        "Brent-WTI Spread",
-        f"${spread:.2f}" if spread is not None else "N/A"
+with w2:
+    st.metric("Confidence", why["confidence"])
+
+with w3:
+    st.metric("Market Regime", why["regime"])
+
+
+section(
+    "Top Market-Moving News",
+    "Three highest-impact live oil-market items"
+)
+
+refresh_news = st.button(
+    "Refresh market data and news",
+    key="refresh_market_news"
+)
+
+if refresh_news:
+    st.cache_data.clear()
+    st.rerun()
+
+news = get_market_movers(limit=3)
+
+for index, row in news.iterrows():
+    icon = (
+        "🟢" if row["Bias"] == "BULLISH"
+        else "🔴" if row["Bias"] == "BEARISH"
+        else "🟡"
     )
 
-section("Top Market-Moving News", "Three highest-impact available items")
+    with st.container(border=True):
+        st.markdown(f"### {index + 1}. {icon} {row['Title']}")
 
-news = load_news()
+        n1, n2, n3 = st.columns([2, 1, 1])
 
-for _, row in news.iterrows():
-    icon = "🟢" if row["Bias"] == "BULLISH" else "🔴" if row["Bias"] == "BEARISH" else "🟡"
+        with n1:
+            st.caption(
+                f"{row['Source']} · {row['Published']}"
+            )
 
-    st.markdown(
-        f"### {icon} {row['Title']}\n"
-        f"**Source:** {row['Source']}  \n"
-        f"**Expected impact:** {row['Bias']} · Score {row['Impact']:+.1f}"
-    )
+        with n2:
+            st.metric(
+                "Expected impact",
+                row["Bias"],
+                f"{row['Impact']:+.1f}"
+            )
+
+        with n3:
+            st.metric(
+                "Confidence",
+                f"{int(row['Confidence'])}%"
+            )
+
+        if row.get("URL"):
+            st.link_button(
+                "Read full article →",
+                row["URL"],
+                use_container_width=False
+            )
+
 
 section("Market Drivers", "Current directional evidence")
 
-drivers = pd.DataFrame([
-    ["OPEC / Production", "NEUTRAL", "No validated live production shock"],
-    ["US Inventories", "NEUTRAL", "Awaiting latest EIA/API update"],
-    ["US Dollar / Fed", "NEUTRAL", "No validated live macro shock"],
-    ["Geopolitics", "NEUTRAL", "No validated high-confidence event"],
-    ["Global Demand", "NEUTRAL", "Mixed demand evidence"],
-    ["Volatility", risk, f"{max(brent['volatility'], wti['volatility']):.1f}% annualized"],
-], columns=["Driver", "State", "Evidence"])
+drivers = build_market_drivers(
+    brent=brent,
+    wti=wti,
+    news=news,
+    risk=risk
+)
 
 st.dataframe(
     drivers,
     width="stretch",
-    hide_index=True
+    hide_index=True,
+    column_config={
+        "Strength": st.column_config.ProgressColumn(
+            "Strength",
+            min_value=0,
+            max_value=100,
+            format="%d"
+        )
+    }
 )
+
 
 section("System State", "Release 39 operating status")
 

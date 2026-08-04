@@ -1,0 +1,64 @@
+
+def build_why_signal(signal, score, confidence, risk, regime, brent, wti, news):
+    reasons = []
+
+    reasons.append(
+        "Brent trades above its 20-day moving average."
+        if brent["trend"] == "BULLISH"
+        else "Brent trades below its 20-day moving average."
+    )
+
+    reasons.append(
+        "WTI trend is bullish."
+        if wti["trend"] == "BULLISH"
+        else "WTI trend is bearish."
+    )
+
+    reasons.append(
+        f"Brent 10-day momentum is "
+        f"{'positive' if brent['momentum'] > 0 else 'negative'} "
+        f"at {brent['momentum']:+.2f}%."
+    )
+
+    reasons.append(
+        "Market volatility is elevated."
+        if risk == "HIGH"
+        else "Market volatility is moderate."
+        if risk == "MEDIUM"
+        else "Market volatility is contained."
+    )
+
+    if news is not None and not news.empty:
+        bullish = int((news["Bias"] == "BULLISH").sum())
+        bearish = int((news["Bias"] == "BEARISH").sum())
+
+        if bullish > bearish:
+            reasons.append("News flow is predominantly bullish.")
+        elif bearish > bullish:
+            reasons.append("News flow is predominantly bearish.")
+        else:
+            reasons.append("News flow is mixed or neutral.")
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+    )
+
+    if "LONG" in str(signal):
+        action = "Current evidence favours upward oil exposure."
+    elif "SHORT" in str(signal):
+        action = "Current evidence favours downward oil exposure."
+    else:
+        action = "Wait for stronger directional confirmation before acting."
+
+    return {
+        "title": f"Why {clean_signal}?",
+        "score": score,
+        "confidence": confidence,
+        "regime": regime,
+        "reasons": reasons,
+        "action": action
+    }
