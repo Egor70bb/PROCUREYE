@@ -663,44 +663,136 @@ def render_market_delta(brent, wti, signal, score, confidence):
 from datetime import datetime, timezone
 import streamlit as st
 
-def render_system_health():
 
+def render_system_health(brent_df, wti_df, news_df):
     now = datetime.now(timezone.utc)
+
+    def latest_market_time(df):
+        if df is None or df.empty or "Date" not in df.columns:
+            return None
+
+        value = pd.to_datetime(
+            df["Date"],
+            errors="coerce",
+            utc=True
+        ).max()
+
+        if pd.isna(value):
+            return None
+
+        return value.to_pydatetime()
+
+    def latest_news_time(df):
+        if (
+            df is None
+            or df.empty
+            or "PublishedUTC" not in df.columns
+        ):
+            return None
+
+        value = pd.to_datetime(
+            df["PublishedUTC"],
+            errors="coerce",
+            utc=True
+        ).max()
+
+        if pd.isna(value):
+            return None
+
+        return value.to_pydatetime()
+
+    brent_time = latest_market_time(brent_df)
+    wti_time = latest_market_time(wti_df)
+    news_time = latest_news_time(news_df)
+
+    valid_times = [
+        value for value in (brent_time, wti_time, news_time)
+        if value is not None
+    ]
+
+    freshest = max(valid_times) if valid_times else None
+
+    age_minutes = (
+        max(0, int((now - freshest).total_seconds() / 60))
+        if freshest else None
+    )
+
+    if age_minutes is None:
+        freshness_state = "UNAVAILABLE"
+    elif age_minutes <= 20:
+        freshness_state = "LIVE"
+    elif age_minutes <= 90:
+        freshness_state = "STALE"
+    else:
+        freshness_state = "FALLBACK"
 
     st.markdown("### 🟢 System Health")
 
-    c1,c2,c3 = st.columns(3)
+    h1, h2, h3, h4 = st.columns(4)
 
-    with c1:
+    with h1:
         st.metric(
-            "Last Update",
+            "Page Update",
             now.strftime("%H:%M UTC")
         )
 
-    with c2:
+    with h2:
         st.metric(
             "Data Age",
-            "0 min"
+            f"{age_minutes} min"
+            if age_minutes is not None
+            else "N/A"
         )
 
-    with c3:
-        if st.button("🔄 Refresh Now"):
+    with h3:
+        st.metric(
+            "Freshness",
+            freshness_state
+        )
+
+    with h4:
+        if st.button(
+            "🔄 Refresh Now",
+            key="global_refresh"
+        ):
             st.cache_data.clear()
             st.rerun()
 
-    st.divider()
+    s1, s2, s3 = st.columns(3)
 
-    a,b,c = st.columns(3)
+    with s1:
+        if brent_df is not None and not brent_df.empty:
+            st.success("Brent source: ONLINE")
+        else:
+            st.error("Brent source: UNAVAILABLE")
 
-    with a:
-        st.success("Yahoo Finance")
+    with s2:
+        if wti_df is not None and not wti_df.empty:
+            st.success("WTI source: ONLINE")
+        else:
+            st.error("WTI source: UNAVAILABLE")
 
-    with b:
-        st.success("Market Movers")
+    with s3:
+        live_news = (
+            news_df is not None
+            and not news_df.empty
+            and not (
+                len(news_df) == 1
+                and str(
+                    news_df.iloc[0].get("Source", "")
+                ).upper() == "PROCUREYE"
+            )
+        )
 
-    with c:
-        st.success("Signal Engine")
+        if live_news:
+            st.success("News sources: ONLINE")
+        else:
+            st.warning("News sources: FALLBACK")
 
+    st.caption(
+        "Prices refresh every 5 minutes; "
+        "news refresh every 15 minutes."
+    )
 
 # ===== MAIN APPLICATION =====
 
@@ -720,6 +812,21 @@ st.set_page_config(
     page_icon="🛢️",
     layout="wide",
     initial_sidebar_state="collapsed"
+)
+
+
+import streamlit.components.v1 as components
+
+components.html(
+    """
+    <script>
+    setTimeout(function () {
+        window.parent.location.reload();
+    }, 300000);
+    </script>
+    """,
+    height=0,
+    width=0
 )
 
 st.markdown("""
@@ -851,7 +958,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.3 · Compact Delta Monitor</div>
+    <div class="pe-release">Release 40.4 · Live Reliability</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -1035,7 +1142,7 @@ def load_price_series(csv_name, ticker):
     return pd.DataFrame(columns=["Date", "Close"])
 
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_market_data():
     return (
         load_price_series("brent.csv", "BZ=F"),
@@ -1236,7 +1343,7 @@ brent_df, wti_df = get_market_data()
 brent = metrics(brent_df)
 wti = metrics(wti_df)
 
-signal_news = get_market_movers(limit=3)
+signal_news = signal_news.copy()
 
 if signal_news is not None and not signal_news.empty:
     news_score = float(
@@ -1269,7 +1376,7 @@ risk = "HIGH" if max(brent["volatility"], wti["volatility"]) >= 45 else "MEDIUM"
 regime = engine_result.get("components", {}).get("regime", "TRANSITION") if isinstance(engine_result, dict) else "TRANSITION"
 
 section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
-render_system_health()
+render_system_health(brent_df, wti_df, signal_news)
 
 render_market_delta(
     brent,
