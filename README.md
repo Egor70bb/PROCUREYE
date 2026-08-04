@@ -2,15 +2,24 @@
 
 Crude Oil Market Intelligence Platform.
 
-## Release 40.7 — Modular Foundation
+## Release 40.10 — Final Stable MVP
 
-Files:
+- Brent and WTI market data
+- Interactive market charts
+- LONG / SHORT / WAIT decision support
+- Market Score, Confidence and Risk
+- News-aware signal
+- Top Market-Moving News
+- Dynamic Market Drivers
+- Explainable decision summary
+- Since Last Refresh monitor
+- System state and human oversight
 
-- `app.py`: stable Streamlit entry point
-- `procureye_legacy.py`: complete operational Release 40.6 dashboard
-- `requirements.txt`: free deployment dependencies
+## Public deployment
 
-The public behaviour is unchanged. Future releases will progressively extract
-market data, news intelligence, signal scoring, monitoring and UI components.
+Main Streamlit file:
 
-Decision support only. PROCUREYE does not execute orders.
+    app.py
+
+PROCUREYE is for decision support only.
+It does not execute orders or trades.
