@@ -2109,7 +2109,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.5.2 · Confidence Engine Fix
+    <div class="pe-release">Release 41.7 · Controlled Execution Architecture
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2551,312 +2551,323 @@ def load_news():
         }
     ])
 
-brent_df, wti_df = get_market_data()
-brent = metrics(brent_df)
-wti = metrics(wti_df)
+# ==============================================================
+# PROCUREYE RELEASE 41.7 — CONTROLLED EXECUTION ARCHITECTURE
+# ==============================================================
 
-signal_news = get_market_movers(limit=3)
+def run_procureye_dashboard():
+    """Execute the complete dashboard in one controlled scope."""
 
-if signal_news is not None and not signal_news.empty:
-    news_score = float(
-        pd.to_numeric(
-            signal_news["Impact"],
-            errors="coerce"
+    brent_df, wti_df = get_market_data()
+    brent = metrics(brent_df)
+    wti = metrics(wti_df)
+
+    signal_news = get_market_movers(limit=3)
+
+    if signal_news is not None and not signal_news.empty:
+        news_score = float(
+            pd.to_numeric(
+                signal_news["Impact"],
+                errors="coerce"
+            )
+            .fillna(0)
+            .clip(-100, 100)
+            .mean()
         )
-        .fillna(0)
-        .clip(-100, 100)
-        .mean()
-    )
-else:
-    news_score = 0.0
+    else:
+        news_score = 0.0
 
-spread = None
+    spread = None
 
-if (
-    brent["price"] is not None
-    and wti["price"] is not None
-):
-    spread = brent["price"] - wti["price"]
+    if (
+        brent["price"] is not None
+        and wti["price"] is not None
+    ):
+        spread = brent["price"] - wti["price"]
 
-market_volatility = max(
-    float(brent.get("volatility", 0) or 0),
-    float(wti.get("volatility", 0) or 0)
-)
-
-risk = (
-    "HIGH"
-    if market_volatility >= 45
-    else "MEDIUM"
-    if market_volatility >= 25
-    else "LOW"
-)
-
-provisional_regime = "TRANSITION"
-
-provisional_fallback = fallback_signal(
-    brent,
-    wti,
-    news_score=0.0
-)
-
-provisional_confidence = provisional_fallback[2]
-
-adaptive_news = calculate_adaptive_news_weight(
-    news=signal_news,
-    risk=risk,
-    regime=provisional_regime,
-    confidence=provisional_confidence
-)
-
-adaptive_news_score = float(
-    adaptive_news.get("effective_score", 0.0)
-)
-
-fallback = fallback_signal(
-    brent,
-    wti,
-    news_score=adaptive_news_score
-)
-
-signal, score, confidence, engine_result = existing_engine_signal(
-    brent_df,
-    wti_df,
-    fallback,
-    news_score=adaptive_news_score
-)
-
-regime = (
-    engine_result
-    .get("components", {})
-    .get("regime", provisional_regime)
-    if isinstance(engine_result, dict)
-    else provisional_regime
-)
-
-confidence_engine = calculate_confidence_engine(
-    brent=brent,
-    wti=wti,
-    adaptive_news=adaptive_news
-)
-
-section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
-render_system_health(brent_df, wti_df, signal_news)
-
-render_market_delta(
-    brent,
-    wti,
-    signal,
-    score,
-    confidence
-)
-
-
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-
-with c1:
-    st.metric(
-        "Brent",
-        f"${brent['price']:.2f}" if brent["price"] is not None else "N/A",
-        f"{brent['change']:+.2f}%" if brent["change"] is not None else None
+    market_volatility = max(
+        float(brent.get("volatility", 0) or 0),
+        float(wti.get("volatility", 0) or 0)
     )
 
-with c2:
-    st.metric(
-        "WTI",
-        f"${wti['price']:.2f}" if wti["price"] is not None else "N/A",
-        f"{wti['change']:+.2f}%" if wti["change"] is not None else None
+    risk = (
+        "HIGH"
+        if market_volatility >= 45
+        else "MEDIUM"
+        if market_volatility >= 25
+        else "LOW"
     )
 
-with c3:
-    st.metric("Signal", signal)
+    provisional_regime = "TRANSITION"
 
-with c4:
-    st.metric("Market Score", f"{score}/100")
-
-with c5:
-    st.metric("Confidence", confidence)
-
-with c6:
-    st.metric("Risk", risk)
-
-section("Market Intelligence", "Brent and WTI interactive history")
-
-left, right = st.columns(2, gap="large")
-
-with left:
-    render_professional_chart(brent_df, "Brent Crude Oil", "BRENT")
-
-with right:
-    render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
-
-
-section("Why This Signal?", "Automatic explainable decision summary")
-
-_why_news = signal_news.copy()
-
-why = build_why_signal(
-    signal=signal,
-    score=score,
-    confidence=confidence,
-    risk=risk,
-    regime=regime,
-    brent=brent,
-    wti=wti,
-    news=_why_news
-)
-
-st.subheader(why["title"])
-
-for reason in why["reasons"]:
-    st.write(f"✓ {reason}")
-
-st.info(why["action"])
-
-w1, w2, w3 = st.columns(3)
-
-with w1:
-    st.metric("Market Score", f"{why['score']}/100")
-
-with w2:
-    st.metric("Confidence", why["confidence"])
-
-with w3:
-    st.metric("Market Regime", why["regime"])
-
-
-section(
-    "Top Market-Moving News",
-    "Three highest-impact live oil-market items"
-)
-
-refresh_news = st.button(
-    "Refresh market data and news",
-    key="refresh_market_news"
-)
-
-if refresh_news:
-    st.cache_data.clear()
-    st.rerun()
-
-news = get_market_movers(limit=3)
-
-for index, row in news.iterrows():
-    icon = (
-        "🟢" if row["Bias"] == "BULLISH"
-        else "🔴" if row["Bias"] == "BEARISH"
-        else "🟡"
+    provisional_fallback = fallback_signal(
+        brent,
+        wti,
+        news_score=0.0
     )
 
-    with st.container(border=True):
-        st.markdown(f"### {index + 1}. {icon} {row['Title']}")
+    provisional_confidence = provisional_fallback[2]
 
-        n1, n2, n3 = st.columns([2, 1, 1])
+    adaptive_news = calculate_adaptive_news_weight(
+        news=signal_news,
+        risk=risk,
+        regime=provisional_regime,
+        confidence=provisional_confidence
+    )
 
-        with n1:
-            st.caption(
-                f"{row['Source']} · {row['Published']}"
-            )
+    adaptive_news_score = float(
+        adaptive_news.get("effective_score", 0.0)
+    )
 
-        with n2:
-            st.metric(
-                "Expected impact",
-                row["Bias"],
-                f"{row['Impact']:+.1f}"
-            )
+    fallback = fallback_signal(
+        brent,
+        wti,
+        news_score=adaptive_news_score
+    )
 
-        with n3:
-            st.metric(
-                "Confidence",
-                f"{int(row['Confidence'])}%"
-            )
+    signal, score, confidence, engine_result = existing_engine_signal(
+        brent_df,
+        wti_df,
+        fallback,
+        news_score=adaptive_news_score
+    )
 
-        if row.get("URL"):
-            st.link_button(
-                "Read full article →",
-                row["URL"],
-                use_container_width=False
-            )
+    regime = (
+        engine_result
+        .get("components", {})
+        .get("regime", provisional_regime)
+        if isinstance(engine_result, dict)
+        else provisional_regime
+    )
+
+    confidence_engine = calculate_confidence_engine(
+        brent=brent,
+        wti=wti,
+        adaptive_news=adaptive_news
+    )
+
+    section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+    render_system_health(brent_df, wti_df, signal_news)
+
+    render_market_delta(
+        brent,
+        wti,
+        signal,
+        score,
+        confidence
+    )
 
 
-section("Market Drivers", "Current directional evidence")
 
-drivers = build_market_drivers(
-    brent=brent,
-    wti=wti,
-    news=news,
-    risk=risk
-)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-st.dataframe(
-    drivers,
-    width="stretch",
-    hide_index=True,
-    column_config={
-        "Strength": st.column_config.ProgressColumn(
-            "Strength",
-            min_value=0,
-            max_value=100,
-            format="%d"
+    with c1:
+        st.metric(
+            "Brent",
+            f"${brent['price']:.2f}" if brent["price"] is not None else "N/A",
+            f"{brent['change']:+.2f}%" if brent["change"] is not None else None
         )
-    }
-)
+
+    with c2:
+        st.metric(
+            "WTI",
+            f"${wti['price']:.2f}" if wti["price"] is not None else "N/A",
+            f"{wti['change']:+.2f}%" if wti["change"] is not None else None
+        )
+
+    with c3:
+        st.metric("Signal", signal)
+
+    with c4:
+        st.metric("Market Score", f"{score}/100")
+
+    with c5:
+        st.metric("Confidence", confidence)
+
+    with c6:
+        st.metric("Risk", risk)
+
+    section("Market Intelligence", "Brent and WTI interactive history")
+
+    left, right = st.columns(2, gap="large")
+
+    with left:
+        render_professional_chart(brent_df, "Brent Crude Oil", "BRENT")
+
+    with right:
+        render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
+
+
+    section("Why This Signal?", "Automatic explainable decision summary")
+
+    _why_news = signal_news.copy()
+
+    why = build_why_signal(
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti,
+        news=_why_news
+    )
+
+    st.subheader(why["title"])
+
+    for reason in why["reasons"]:
+        st.write(f"✓ {reason}")
+
+    st.info(why["action"])
+
+    w1, w2, w3 = st.columns(3)
+
+    with w1:
+        st.metric("Market Score", f"{why['score']}/100")
+
+    with w2:
+        st.metric("Confidence", why["confidence"])
+
+    with w3:
+        st.metric("Market Regime", why["regime"])
+
+
+    section(
+        "Top Market-Moving News",
+        "Three highest-impact live oil-market items"
+    )
+
+    refresh_news = st.button(
+        "Refresh market data and news",
+        key="refresh_market_news"
+    )
+
+    if refresh_news:
+        st.cache_data.clear()
+        st.rerun()
+
+    news = get_market_movers(limit=3)
+
+    for index, row in news.iterrows():
+        icon = (
+            "🟢" if row["Bias"] == "BULLISH"
+            else "🔴" if row["Bias"] == "BEARISH"
+            else "🟡"
+        )
+
+        with st.container(border=True):
+            st.markdown(f"### {index + 1}. {icon} {row['Title']}")
+
+            n1, n2, n3 = st.columns([2, 1, 1])
+
+            with n1:
+                st.caption(
+                    f"{row['Source']} · {row['Published']}"
+                )
+
+            with n2:
+                st.metric(
+                    "Expected impact",
+                    row["Bias"],
+                    f"{row['Impact']:+.1f}"
+                )
+
+            with n3:
+                st.metric(
+                    "Confidence",
+                    f"{int(row['Confidence'])}%"
+                )
+
+            if row.get("URL"):
+                st.link_button(
+                    "Read full article →",
+                    row["URL"],
+                    use_container_width=False
+                )
+
+
+    section("Market Drivers", "Current directional evidence")
+
+    drivers = build_market_drivers(
+        brent=brent,
+        wti=wti,
+        news=news,
+        risk=risk
+    )
+
+    st.dataframe(
+        drivers,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Strength": st.column_config.ProgressColumn(
+                "Strength",
+                min_value=0,
+                max_value=100,
+                format="%d"
+            )
+        }
+    )
 
 
 
-record_decision_journal(
-    brent=brent,
-    wti=wti,
-    signal=signal,
-    score=score,
-    confidence=confidence,
-    risk=risk,
-    regime=regime,
-    news=news
-)
+    record_decision_journal(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        news=news
+    )
 
 
-section(
-    "Adaptive News Weight",
-    "Controlled contribution of live news to the Market Score"
-)
+    section(
+        "Adaptive News Weight",
+        "Controlled contribution of live news to the Market Score"
+    )
 
-render_adaptive_news_weight(
-    adaptive_news
-)
-
-
-section(
-    "Decision Journal",
-    "Recorded market decisions and changes"
-)
-
-render_decision_journal()
+    render_adaptive_news_weight(
+        adaptive_news
+    )
 
 
+    section(
+        "Decision Journal",
+        "Recorded market decisions and changes"
+    )
+
+    render_decision_journal()
 
 
-render_confidence_engine(
-    confidence_engine
-)
 
-section("System State", "Release 39 operating status")
 
-s1, s2, s3, s4 = st.columns(4)
+    render_confidence_engine(
+        confidence_engine
+    )
 
-with s1:
-    st.metric("Agent State", "CONTROLLED")
+    section("System State", "Release 39 operating status")
 
-with s2:
-    st.metric("Learning State", "ACTIVE")
+    s1, s2, s3, s4 = st.columns(4)
 
-with s3:
-    st.metric("Decision Mode", "SUPPORT ONLY")
+    with s1:
+        st.metric("Agent State", "CONTROLLED")
 
-with s4:
-    st.metric("Human Oversight", "REQUIRED")
+    with s2:
+        st.metric("Learning State", "ACTIVE")
 
-st.caption(
-    "PROCUREYE does not execute trades or orders. "
-    "All outputs are decision-support information only."
-)
+    with s3:
+        st.metric("Decision Mode", "SUPPORT ONLY")
+
+    with s4:
+        st.metric("Human Oversight", "REQUIRED")
+
+    st.caption(
+        "PROCUREYE does not execute trades or orders. "
+        "All outputs are decision-support information only."
+    )
+
+
+if __name__ == "__main__":
+    run_procureye_dashboard()
