@@ -1,4 +1,4 @@
-# PROCUREYE RELEASE 40.2.1 — NEWS-AWARE SIGNAL FIX
+# PROCUREYE RELEASE 40.3 — COMPACT DELTA MONITOR
 
 # ===== EMBEDDED MODULE: professional_chart.py =====
 
@@ -518,52 +518,144 @@ def build_why_signal(signal, score, confidence, risk, regime, brent, wti, news):
 # ===== EMBEDDED MODULE: market_delta.py =====
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
 import streamlit as st
 
-FILE=Path("data/last_snapshot.json")
 
-def render_market_delta(brent,wti,signal,score,confidence):
+SNAPSHOT_FILE = Path("data/last_snapshot.json")
 
-    FILE.parent.mkdir(exist_ok=True)
 
-    cur={
-        "brent":float(brent["price"]),
-        "wti":float(wti["price"]),
-        "signal":str(signal),
-        "score":int(score),
-        "confidence":str(confidence)
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _clean_signal(value):
+    return (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+    )
+
+
+def render_market_delta(brent, wti, signal, score, confidence):
+    SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    current = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "brent": _safe_float(brent.get("price")),
+        "wti": _safe_float(wti.get("price")),
+        "signal": str(signal),
+        "score": int(score),
+        "confidence": str(confidence),
     }
 
-    if FILE.exists():
+    previous = None
 
-        old=json.loads(FILE.read_text())
+    if SNAPSHOT_FILE.exists():
+        try:
+            previous = json.loads(
+                SNAPSHOT_FILE.read_text(encoding="utf-8")
+            )
+        except Exception:
+            previous = None
 
-        st.markdown("### 📈 Since Last Refresh")
+    st.markdown("### 📈 Since Last Refresh")
 
-        a,b,c,d,e=st.columns(5)
+    if not previous:
+        st.caption(
+            "Baseline created. Changes will appear after the next refresh."
+        )
+    else:
+        old_brent = _safe_float(previous.get("brent"))
+        old_wti = _safe_float(previous.get("wti"))
 
-        a.metric("Brent",
-                 f"${cur['brent']:.2f}",
-                 f"{cur['brent']-old['brent']:+.2f}")
+        delta_brent = (
+            current["brent"] - old_brent
+            if current["brent"] is not None and old_brent is not None
+            else None
+        )
 
-        b.metric("WTI",
-                 f"${cur['wti']:.2f}",
-                 f"{cur['wti']-old['wti']:+.2f}")
+        delta_wti = (
+            current["wti"] - old_wti
+            if current["wti"] is not None and old_wti is not None
+            else None
+        )
 
-        c.metric("Signal",
-                 cur["signal"],
-                 old["signal"])
+        delta_score = current["score"] - int(previous.get("score", current["score"]))
 
-        d.metric("Score",
-                 cur["score"],
-                 cur["score"]-old["score"])
+        old_signal = str(previous.get("signal", current["signal"]))
+        old_confidence = str(
+            previous.get("confidence", current["confidence"])
+        )
 
-        e.metric("Confidence",
-                 cur["confidence"],
-                 old["confidence"])
+        c1, c2, c3, c4, c5 = st.columns(5)
 
-    FILE.write_text(json.dumps(cur,indent=2))
+        with c1:
+            st.metric(
+                "Δ Brent",
+                f"{delta_brent:+.2f}" if delta_brent is not None else "N/A",
+                help="Price change in USD since the previous refresh."
+            )
+
+        with c2:
+            st.metric(
+                "Δ WTI",
+                f"{delta_wti:+.2f}" if delta_wti is not None else "N/A",
+                help="Price change in USD since the previous refresh."
+            )
+
+        with c3:
+            if old_signal != current["signal"]:
+                st.metric(
+                    "Signal Change",
+                    _clean_signal(current["signal"]),
+                    f"{_clean_signal(old_signal)} → {_clean_signal(current['signal'])}"
+                )
+            else:
+                st.metric(
+                    "Signal Change",
+                    "UNCHANGED",
+                    _clean_signal(current["signal"]),
+                    delta_color="off"
+                )
+
+        with c4:
+            st.metric(
+                "Δ Market Score",
+                f"{delta_score:+d}",
+                f"{previous.get('score', current['score'])} → {current['score']}"
+                if delta_score != 0 else "UNCHANGED",
+                delta_color="normal" if delta_score != 0 else "off"
+            )
+
+        with c5:
+            if old_confidence != current["confidence"]:
+                st.metric(
+                    "Confidence Change",
+                    current["confidence"],
+                    f"{old_confidence} → {current['confidence']}"
+                )
+            else:
+                st.metric(
+                    "Confidence Change",
+                    "UNCHANGED",
+                    current["confidence"],
+                    delta_color="off"
+                )
+
+    SNAPSHOT_FILE.write_text(
+        json.dumps(current, indent=2),
+        encoding="utf-8"
+    )
 
 
 # ===== EMBEDDED MODULE: system_health.py =====
@@ -759,7 +851,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.2.1 · News-Aware Signal Fix</div>
+    <div class="pe-release">Release 40.3 · Compact Delta Monitor</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
