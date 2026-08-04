@@ -1958,6 +1958,157 @@ def render_confidence_engine(result):
         )
 
 
+
+# PROCUREYE RELEASE 41.8.1 — DAILY MARKET BRIEF
+
+def build_daily_market_brief(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    adaptive_news,
+    confidence_engine,
+    news
+):
+    def format_price(value):
+        try:
+            return f"${float(value):.2f}"
+        except Exception:
+            return "N/A"
+
+    def format_percent(value):
+        try:
+            return f"{float(value):+.2f}%"
+        except Exception:
+            return "N/A"
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+    )
+
+    news_direction = str(
+        adaptive_news.get("direction", "NEUTRAL")
+    )
+
+    dominant_driver = str(
+        adaptive_news.get("dominant_driver", "NONE")
+    )
+
+    effective_news_score = float(
+        adaptive_news.get("effective_score", 0.0)
+    )
+
+    confidence_score = int(
+        confidence_engine.get("score", 0)
+    )
+
+    confidence_label = str(
+        confidence_engine.get("label", confidence)
+    )
+
+    news_count = 0
+    top_headline = "No dominant live headline."
+
+    if news is not None and not news.empty:
+        news_count = int(len(news))
+
+        if "Title" in news.columns:
+            top_headline = str(
+                news.iloc[0].get(
+                    "Title",
+                    top_headline
+                )
+            )
+
+    structure = (
+        f"Brent is {format_price(brent.get('price'))} "
+        f"({format_percent(brent.get('change'))}) with a "
+        f"{str(brent.get('trend', 'UNKNOWN')).lower()} trend. "
+        f"WTI is {format_price(wti.get('price'))} "
+        f"({format_percent(wti.get('change'))}) with a "
+        f"{str(wti.get('trend', 'UNKNOWN')).lower()} trend."
+    )
+
+    momentum = (
+        f"Brent 10-day momentum is "
+        f"{float(brent.get('momentum', 0)):+.2f}% and "
+        f"WTI momentum is "
+        f"{float(wti.get('momentum', 0)):+.2f}%."
+    )
+
+    news_summary = (
+        f"News pressure is {news_direction.lower()} with "
+        f"effective score {effective_news_score:+.1f}. "
+        f"The dominant driver is {dominant_driver}. "
+        f"{news_count} market-moving item(s) are ranked. "
+        f"Top headline: {top_headline}"
+    )
+
+    decision = (
+        f"PROCUREYE indicates {clean_signal} with "
+        f"Market Score {int(score)}/100, "
+        f"Confidence Engine {confidence_score}% "
+        f"({confidence_label}), risk {risk}, "
+        f"and regime {regime}."
+    )
+
+    if "LONG" in clean_signal.upper():
+        action = (
+            "Upward evidence dominates. Confirm persistence in price, "
+            "momentum and news before taking exposure."
+        )
+    elif "SHORT" in clean_signal.upper():
+        action = (
+            "Downward evidence dominates. Confirm persistence in price, "
+            "momentum and news before taking exposure."
+        )
+    else:
+        action = (
+            "Directional confirmation remains insufficient. "
+            "Maintain WAIT until stronger evidence emerges."
+        )
+
+    return {
+        "structure": structure,
+        "momentum": momentum,
+        "news": news_summary,
+        "decision": decision,
+        "action": action,
+    }
+
+
+def render_daily_market_brief(brief):
+    section(
+        "Daily Market Brief",
+        "One-minute executive market summary"
+    )
+
+    st.markdown(
+        f"""
+**Market structure**  
+{brief["structure"]}
+
+**Momentum**  
+{brief["momentum"]}
+
+**News intelligence**  
+{brief["news"]}
+
+**Decision**  
+{brief["decision"]}
+"""
+    )
+
+    st.info(brief["action"])
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -2109,7 +2260,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.7 · Controlled Execution Architecture
+    <div class="pe-release">Release 41.8.1 · Daily Market Brief
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2845,6 +2996,23 @@ def run_procureye_dashboard():
 
     render_confidence_engine(
         confidence_engine
+    )
+
+    daily_market_brief = build_daily_market_brief(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        adaptive_news=adaptive_news,
+        confidence_engine=confidence_engine,
+        news=news,
+    )
+
+    render_daily_market_brief(
+        daily_market_brief
     )
 
     section("System State", "Release 39 operating status")
