@@ -1,0 +1,24 @@
+{
+  "project": "PROCUREYE",
+  "release": "41.8.1 Stable Checkpoint",
+  "created_utc": "2026-08-04T14:02:00.285249+00:00",
+  "github_repository": "Egor70bb/PROCUREYE",
+  "main_file": "app.py",
+  "sha256_app": "10c6fc9d930e0246f78026921b9f44db1f11a976de5a6eccd6aa6e5dd4414cb3",
+  "validated_components": [
+    "Controlled Execution Architecture",
+    "Brent and WTI market data",
+    "Professional charts",
+    "LONG / SHORT / WAIT signal",
+    "News Intelligence",
+    "Adaptive News Weight",
+    "Confidence Engine",
+    "Decision Journal",
+    "Daily Market Brief",
+    "System Health",
+    "Delta Monitor"
+  ],
+  "syntax_validation": true,
+  "runtime_validation": true,
+  "http_status": 200
+}
