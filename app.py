@@ -1958,159 +1958,6 @@ def render_confidence_engine(result):
         )
 
 
-
-# PROCUREYE RELEASE 41.6 — DAILY MARKET BRIEF
-
-def build_daily_market_brief(
-    brent,
-    wti,
-    signal,
-    score,
-    confidence,
-    risk,
-    regime,
-    adaptive_news,
-    confidence_engine,
-    news
-):
-    def fmt_price(value):
-        try:
-            return f"${float(value):.2f}"
-        except Exception:
-            return "N/A"
-
-    def fmt_pct(value):
-        try:
-            return f"{float(value):+.2f}%"
-        except Exception:
-            return "N/A"
-
-    brent_price = fmt_price(brent.get("price"))
-    wti_price = fmt_price(wti.get("price"))
-    brent_change = fmt_pct(brent.get("change"))
-    wti_change = fmt_pct(wti.get("change"))
-
-    clean_signal = (
-        str(signal)
-        .replace("🟢", "")
-        .replace("🔴", "")
-        .replace("🟡", "")
-        .strip()
-    )
-
-    direction = str(
-        adaptive_news.get("direction", "NEUTRAL")
-    )
-
-    dominant_driver = str(
-        adaptive_news.get("dominant_driver", "NONE")
-    )
-
-    confidence_score = int(
-        confidence_engine.get("score", 0)
-    )
-
-    confidence_label = str(
-        confidence_engine.get("label", confidence)
-    )
-
-    news_count = 0
-    top_headline = "No dominant live headline."
-
-    if news is not None and not news.empty:
-        news_count = int(len(news))
-
-        if "Title" in news.columns:
-            top_headline = str(
-                news.iloc[0].get(
-                    "Title",
-                    top_headline
-                )
-            )
-
-    market_structure = (
-        f"Brent trades at {brent_price} "
-        f"({brent_change}) with a "
-        f"{str(brent.get('trend', 'UNKNOWN')).lower()} trend. "
-        f"WTI trades at {wti_price} "
-        f"({wti_change}) with a "
-        f"{str(wti.get('trend', 'UNKNOWN')).lower()} trend."
-    )
-
-    momentum_text = (
-        f"Brent 10-day momentum is "
-        f"{float(brent.get('momentum', 0)):+.2f}% "
-        f"and WTI momentum is "
-        f"{float(wti.get('momentum', 0)):+.2f}%."
-    )
-
-    news_text = (
-        f"The live news flow is {direction.lower()}, "
-        f"driven mainly by {dominant_driver}. "
-        f"{news_count} market-moving item(s) are currently ranked. "
-        f"Top headline: {top_headline}"
-    )
-
-    decision_text = (
-        f"PROCUREYE indicates {clean_signal} with "
-        f"Market Score {int(score)}/100, "
-        f"confidence {confidence_label} "
-        f"({confidence_score}%), risk {risk}, "
-        f"and market regime {regime}."
-    )
-
-    if "LONG" in clean_signal:
-        action = (
-            "Upward evidence currently dominates, "
-            "but confirmation from price and news persistence remains required."
-        )
-    elif "SHORT" in clean_signal:
-        action = (
-            "Downward evidence currently dominates, "
-            "but confirmation from price and news persistence remains required."
-        )
-    else:
-        action = (
-            "Directional evidence remains insufficient; "
-            "wait for stronger confirmation before acting."
-        )
-
-    return {
-        "market_structure": market_structure,
-        "momentum": momentum_text,
-        "news": news_text,
-        "decision": decision_text,
-        "action": action
-    }
-
-
-def render_daily_market_brief(brief):
-    section(
-        "Daily Market Brief",
-        "One-minute executive summary"
-    )
-
-    st.markdown(
-        f"""
-        **Market structure**  
-        {brief["market_structure"]}
-
-        **Momentum**  
-        {brief["momentum"]}
-
-        **News intelligence**  
-        {brief["news"]}
-
-        **Decision**  
-        {brief["decision"]}
-        """
-    )
-
-    st.info(
-        brief["action"]
-    )
-
-
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -2262,7 +2109,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.6 · Daily Market Brief
+    <div class="pe-release">Release 41.5.2 · Confidence Engine Fix
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2712,7 +2559,10 @@ signal_news = get_market_movers(limit=3)
 
 if signal_news is not None and not signal_news.empty:
     news_score = float(
-        signal_news["Impact"]
+        pd.to_numeric(
+            signal_news["Impact"],
+            errors="coerce"
+        )
         .fillna(0)
         .clip(-100, 100)
         .mean()
@@ -2720,16 +2570,46 @@ if signal_news is not None and not signal_news.empty:
 else:
     news_score = 0.0
 
+spread = None
+
+if (
+    brent["price"] is not None
+    and wti["price"] is not None
+):
+    spread = brent["price"] - wti["price"]
+
+market_volatility = max(
+    float(brent.get("volatility", 0) or 0),
+    float(wti.get("volatility", 0) or 0)
+)
+
+risk = (
+    "HIGH"
+    if market_volatility >= 45
+    else "MEDIUM"
+    if market_volatility >= 25
+    else "LOW"
+)
+
+provisional_regime = "TRANSITION"
+
+provisional_fallback = fallback_signal(
+    brent,
+    wti,
+    news_score=0.0
+)
+
+provisional_confidence = provisional_fallback[2]
 
 adaptive_news = calculate_adaptive_news_weight(
     news=signal_news,
     risk=risk,
-    regime=regime,
-    confidence=confidence
+    regime=provisional_regime,
+    confidence=provisional_confidence
 )
 
 adaptive_news_score = float(
-    adaptive_news["effective_score"]
+    adaptive_news.get("effective_score", 0.0)
 )
 
 fallback = fallback_signal(
@@ -2742,15 +2622,22 @@ signal, score, confidence, engine_result = existing_engine_signal(
     brent_df,
     wti_df,
     fallback,
-    news_score=news_score
+    news_score=adaptive_news_score
 )
 
-spread = None
-if brent["price"] is not None and wti["price"] is not None:
-    spread = brent["price"] - wti["price"]
+regime = (
+    engine_result
+    .get("components", {})
+    .get("regime", provisional_regime)
+    if isinstance(engine_result, dict)
+    else provisional_regime
+)
 
-risk = "HIGH" if max(brent["volatility"], wti["volatility"]) >= 45 else "MEDIUM" if max(brent["volatility"], wti["volatility"]) >= 25 else "LOW"
-regime = engine_result.get("components", {}).get("regime", "TRANSITION") if isinstance(engine_result, dict) else "TRANSITION"
+confidence_engine = calculate_confidence_engine(
+    brent=brent,
+    wti=wti,
+    adaptive_news=adaptive_news
+)
 
 section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
 render_system_health(brent_df, wti_df, signal_news)
@@ -2949,36 +2836,9 @@ render_decision_journal()
 
 
 
-confidence_engine=calculate_confidence_engine(
-
-    brent,
-    wti,
-    adaptive_news
-
-)
-
 render_confidence_engine(
     confidence_engine
 )
-
-
-daily_market_brief = build_daily_market_brief(
-    brent=brent,
-    wti=wti,
-    signal=signal,
-    score=score,
-    confidence=confidence,
-    risk=risk,
-    regime=regime,
-    adaptive_news=adaptive_news,
-    confidence_engine=confidence_engine,
-    news=news
-)
-
-render_daily_market_brief(
-    daily_market_brief
-)
-
 
 section("System State", "Release 39 operating status")
 
