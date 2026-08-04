@@ -1,8 +1,6 @@
-# PROCUREYE RELEASE 40.1 — STANDALONE PRODUCTION
+# PROCUREYE RELEASE 40.2 — NEWS-AWARE SIGNAL
 
-# ============================================================
-# EMBEDDED MODULE: professional_chart.py
-# ============================================================
+# ===== EMBEDDED MODULE: professional_chart.py =====
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -128,9 +126,7 @@ def render_professional_chart(df, title, symbol):
     )
 
 
-# ============================================================
-# EMBEDDED MODULE: market_movers.py
-# ============================================================
+# ===== EMBEDDED MODULE: market_movers.py =====
 
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -372,9 +368,7 @@ def get_market_movers(limit=3):
     return frame
 
 
-# ============================================================
-# EMBEDDED MODULE: market_drivers.py
-# ============================================================
+# ===== EMBEDDED MODULE: market_drivers.py =====
 
 import pandas as pd
 
@@ -454,9 +448,7 @@ def build_market_drivers(brent, wti, news, risk):
     return pd.DataFrame(rows)
 
 
-# ============================================================
-# EMBEDDED MODULE: why_signal.py
-# ============================================================
+# ===== EMBEDDED MODULE: why_signal.py =====
 
 def build_why_signal(signal, score, confidence, risk, regime, brent, wti, news):
     reasons = []
@@ -523,9 +515,7 @@ def build_why_signal(signal, score, confidence, risk, regime, brent, wti, news):
     }
 
 
-# ============================================================
-# EMBEDDED MODULE: market_delta.py
-# ============================================================
+# ===== EMBEDDED MODULE: market_delta.py =====
 
 import json
 from pathlib import Path
@@ -576,9 +566,7 @@ def render_market_delta(brent,wti,signal,score,confidence):
     FILE.write_text(json.dumps(cur,indent=2))
 
 
-# ============================================================
-# EMBEDDED MODULE: system_health.py
-# ============================================================
+# ===== EMBEDDED MODULE: system_health.py =====
 
 from datetime import datetime, timezone
 import streamlit as st
@@ -622,9 +610,7 @@ def render_system_health():
         st.success("Signal Engine")
 
 
-# ============================================================
-# MAIN APPLICATION
-# ============================================================
+# ===== MAIN APPLICATION =====
 
 import streamlit as st
 import pandas as pd
@@ -773,7 +759,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.1 · Production MVP</div>
+    <div class="pe-release">Release 40.2 · News-Aware Signal</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -999,7 +985,7 @@ def metrics(df):
         "volatility": volatility
     }
 
-def fallback_signal(brent, wti):
+def fallback_signal(brent, wti, news_score=0):
     score = 50
 
     for item in (brent, wti):
@@ -1010,6 +996,12 @@ def fallback_signal(brent, wti):
 
         score += max(-7, min(7, item["momentum"]))
 
+    news_adjustment = max(
+        -15,
+        min(15, float(news_score) * 0.15)
+    )
+
+    score += news_adjustment
     score = int(max(0, min(100, round(score))))
 
     if score >= 62:
@@ -1023,7 +1015,7 @@ def fallback_signal(brent, wti):
 
     return signal, score, confidence
 
-def existing_engine_signal(brent_df, wti_df, fallback):
+def existing_engine_signal(brent_df, wti_df, fallback, news_score=0):
     try:
         from procureye_signal_engine_v22 import calculate_signal
 
@@ -1035,7 +1027,7 @@ def existing_engine_signal(brent_df, wti_df, fallback):
             "brent_close": brent_df["Close"],
             "wti": wti_df["Close"],
             "wti_close": wti_df["Close"],
-            "news_score": 0
+            "news_score": news_score
         }
 
         for name in signature.parameters:
@@ -1152,11 +1144,29 @@ brent_df, wti_df = get_market_data()
 brent = metrics(brent_df)
 wti = metrics(wti_df)
 
-fallback = fallback_signal(brent, wti)
+signal_news = signal_news.copy()
+
+if signal_news is not None and not signal_news.empty:
+    news_score = float(
+        signal_news["Impact"]
+        .fillna(0)
+        .clip(-100, 100)
+        .mean()
+    )
+else:
+    news_score = 0.0
+
+fallback = fallback_signal(
+    brent,
+    wti,
+    news_score=news_score
+)
+
 signal, score, confidence, engine_result = existing_engine_signal(
     brent_df,
     wti_df,
-    fallback
+    fallback,
+    news_score=news_score
 )
 
 spread = None
@@ -1220,7 +1230,7 @@ with right:
 
 section("Why This Signal?", "Automatic explainable decision summary")
 
-_why_news = get_market_movers(limit=3)
+_why_news = signal_news.copy()
 
 why = build_why_signal(
     signal=signal,
