@@ -1523,6 +1523,416 @@ def render_decision_journal():
     )
 
 
+
+# PROCUREYE RELEASE 41.3 — OUTCOME VALIDATION
+
+def _ensure_outcome_columns(connection):
+    existing = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(decision_journal)"
+        ).fetchall()
+    }
+
+    required = {
+        "return_1h": "REAL",
+        "return_4h": "REAL",
+        "return_24h": "REAL",
+        "outcome_1h": "TEXT",
+        "outcome_4h": "TEXT",
+        "outcome_24h": "TEXT",
+    }
+
+    for column, column_type in required.items():
+        if column not in existing:
+            connection.execute(
+                f"ALTER TABLE decision_journal "
+                f"ADD COLUMN {column} {column_type}"
+            )
+
+    connection.commit()
+
+
+def _combined_market_return(
+    initial_brent,
+    future_brent,
+    initial_wti,
+    future_wti
+):
+    returns = []
+
+    try:
+        if (
+            initial_brent is not None
+            and future_brent is not None
+            and float(initial_brent) != 0
+        ):
+            returns.append(
+                (
+                    float(future_brent)
+                    / float(initial_brent)
+                    - 1
+                ) * 100
+            )
+    except Exception:
+        pass
+
+    try:
+        if (
+            initial_wti is not None
+            and future_wti is not None
+            and float(initial_wti) != 0
+        ):
+            returns.append(
+                (
+                    float(future_wti)
+                    / float(initial_wti)
+                    - 1
+                ) * 100
+            )
+    except Exception:
+        pass
+
+    if not returns:
+        return None
+
+    return sum(returns) / len(returns)
+
+
+def _classify_signal_outcome(signal, market_return):
+    if market_return is None:
+        return None
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .upper()
+        .strip()
+    )
+
+    threshold = 0.20
+
+    if "LONG" in clean_signal:
+        return (
+            "CORRECT"
+            if market_return >= threshold
+            else "WRONG"
+        )
+
+    if "SHORT" in clean_signal:
+        return (
+            "CORRECT"
+            if market_return <= -threshold
+            else "WRONG"
+        )
+
+    if "WAIT" in clean_signal:
+        return (
+            "CORRECT"
+            if abs(market_return) < threshold
+            else "MISSED MOVE"
+        )
+
+    return "UNCLASSIFIED"
+
+
+def update_decision_outcomes():
+    from datetime import datetime, timezone, timedelta
+
+    connection = _decision_journal_connection()
+    _ensure_outcome_columns(connection)
+
+    rows = connection.execute(
+        """
+        SELECT
+            id,
+            timestamp_utc,
+            brent,
+            wti,
+            signal,
+            return_1h,
+            return_4h,
+            return_24h
+        FROM decision_journal
+        ORDER BY timestamp_utc ASC
+        """
+    ).fetchall()
+
+    horizons = [
+        (
+            "1h",
+            timedelta(hours=1),
+            timedelta(hours=2),
+            5,
+            6
+        ),
+        (
+            "4h",
+            timedelta(hours=4),
+            timedelta(hours=6),
+            6,
+            7
+        ),
+        (
+            "24h",
+            timedelta(hours=24),
+            timedelta(hours=30),
+            7,
+            8
+        ),
+    ]
+
+    updates = 0
+
+    for row in rows:
+        (
+            row_id,
+            timestamp_text,
+            initial_brent,
+            initial_wti,
+            signal,
+            return_1h,
+            return_4h,
+            return_24h,
+        ) = row
+
+        try:
+            initial_time = datetime.fromisoformat(timestamp_text)
+
+            if initial_time.tzinfo is None:
+                initial_time = initial_time.replace(
+                    tzinfo=timezone.utc
+                )
+
+        except Exception:
+            continue
+
+        existing_returns = {
+            "1h": return_1h,
+            "4h": return_4h,
+            "24h": return_24h,
+        }
+
+        for (
+            horizon_name,
+            target_delta,
+            maximum_delta,
+            _,
+            _
+        ) in horizons:
+            if existing_returns[horizon_name] is not None:
+                continue
+
+            target_time = initial_time + target_delta
+            maximum_time = initial_time + maximum_delta
+
+            future = connection.execute(
+                """
+                SELECT
+                    brent,
+                    wti,
+                    timestamp_utc
+                FROM decision_journal
+                WHERE timestamp_utc >= ?
+                  AND timestamp_utc <= ?
+                ORDER BY timestamp_utc ASC
+                LIMIT 1
+                """,
+                (
+                    target_time.isoformat(),
+                    maximum_time.isoformat(),
+                )
+            ).fetchone()
+
+            if future is None:
+                continue
+
+            future_brent, future_wti, _ = future
+
+            market_return = _combined_market_return(
+                initial_brent,
+                future_brent,
+                initial_wti,
+                future_wti
+            )
+
+            if market_return is None:
+                continue
+
+            outcome = _classify_signal_outcome(
+                signal,
+                market_return
+            )
+
+            return_column = f"return_{horizon_name}"
+            outcome_column = f"outcome_{horizon_name}"
+
+            connection.execute(
+                f"""
+                UPDATE decision_journal
+                SET {return_column} = ?,
+                    {outcome_column} = ?
+                WHERE id = ?
+                """,
+                (
+                    round(market_return, 4),
+                    outcome,
+                    row_id,
+                )
+            )
+
+            updates += 1
+
+    connection.commit()
+    connection.close()
+
+    return updates
+
+
+def render_outcome_validation():
+    update_decision_outcomes()
+
+    connection = _decision_journal_connection()
+    _ensure_outcome_columns(connection)
+
+    frame = pd.read_sql_query(
+        """
+        SELECT
+            timestamp_utc AS "Timestamp UTC",
+            signal AS "Signal",
+            market_score AS "Score",
+            confidence AS "Confidence",
+            return_1h AS "Return 1H",
+            outcome_1h AS "Outcome 1H",
+            return_4h AS "Return 4H",
+            outcome_4h AS "Outcome 4H",
+            return_24h AS "Return 24H",
+            outcome_24h AS "Outcome 24H"
+        FROM decision_journal
+        ORDER BY id DESC
+        LIMIT 100
+        """,
+        connection
+    )
+
+    connection.close()
+
+    if frame.empty:
+        st.info(
+            "Outcome Validation awaits sufficient historical observations."
+        )
+        return
+
+    def horizon_stats(outcome_column):
+        valid = frame[
+            frame[outcome_column].notna()
+        ]
+
+        if valid.empty:
+            return 0, None
+
+        correct = int(
+            (valid[outcome_column] == "CORRECT").sum()
+        )
+
+        accuracy = (
+            correct / len(valid) * 100
+            if len(valid) > 0
+            else None
+        )
+
+        return len(valid), accuracy
+
+    count_1h, accuracy_1h = horizon_stats("Outcome 1H")
+    count_4h, accuracy_4h = horizon_stats("Outcome 4H")
+    count_24h, accuracy_24h = horizon_stats("Outcome 24H")
+
+    v1, v2, v3, v4 = st.columns(4)
+
+    with v1:
+        st.metric(
+            "Validated 1H",
+            count_1h
+        )
+
+    with v2:
+        st.metric(
+            "Accuracy 1H",
+            (
+                f"{accuracy_1h:.1f}%"
+                if accuracy_1h is not None
+                else "N/A"
+            )
+        )
+
+    with v3:
+        st.metric(
+            "Accuracy 4H",
+            (
+                f"{accuracy_4h:.1f}%"
+                if accuracy_4h is not None
+                else "N/A"
+            )
+        )
+
+    with v4:
+        st.metric(
+            "Accuracy 24H",
+            (
+                f"{accuracy_24h:.1f}%"
+                if accuracy_24h is not None
+                else "N/A"
+            )
+        )
+
+    display = frame[
+        frame[
+            [
+                "Outcome 1H",
+                "Outcome 4H",
+                "Outcome 24H"
+            ]
+        ].notna().any(axis=1)
+    ].head(20).copy()
+
+    if display.empty:
+        st.caption(
+            "No outcome horizon is mature yet. "
+            "Keep PROCUREYE active and revisit after 1–24 hours."
+        )
+        return
+
+    display["Timestamp UTC"] = pd.to_datetime(
+        display["Timestamp UTC"],
+        errors="coerce",
+        utc=True
+    ).dt.strftime("%d %b %Y · %H:%M UTC")
+
+    for column in [
+        "Return 1H",
+        "Return 4H",
+        "Return 24H"
+    ]:
+        display[column] = pd.to_numeric(
+            display[column],
+            errors="coerce"
+        ).round(2)
+
+    st.dataframe(
+        display,
+        width="stretch",
+        hide_index=True
+    )
+
+    st.caption(
+        "A LONG is correct when the combined Brent/WTI return "
+        "is at least +0.20%; a SHORT when it is at most -0.20%; "
+        "WAIT is correct when the absolute move remains below 0.20%."
+    )
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -1674,7 +2084,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.1 · Decision Journal Foundation</div>
+    <div class="pe-release">Release 41.3 · Outcome Validation</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2334,6 +2744,15 @@ section(
 )
 
 render_decision_journal()
+
+
+
+section(
+    "Outcome Validation",
+    "Observed market performance after PROCUREYE decisions"
+)
+
+render_outcome_validation()
 
 
 section("System State", "Release 39 operating status")
