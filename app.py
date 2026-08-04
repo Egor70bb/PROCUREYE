@@ -1754,6 +1754,210 @@ def render_adaptive_news_weight(
     )
 
 
+
+# ======================================================================
+# PROCUREYE RELEASE 41.5
+# CONFIDENCE ENGINE
+# ======================================================================
+
+def calculate_confidence_engine(
+    brent,
+    wti,
+    adaptive_news,
+    similar_cases=None,
+    validation=None
+):
+
+    trend = 50
+    momentum = 50
+    volatility = 50
+    news = 50
+    history = 50
+    validation_score = 50
+
+    try:
+
+        if brent.get("trend") == "BULLISH":
+            trend += 20
+        elif brent.get("trend") == "BEARISH":
+            trend += 20
+
+        if wti.get("trend") == brent.get("trend"):
+            trend += 15
+
+    except:
+        pass
+
+    try:
+
+        bm = abs(float(brent.get("momentum",0)))
+        wm = abs(float(wti.get("momentum",0)))
+
+        momentum += min(25,(bm+wm)/2)
+
+    except:
+        pass
+
+    try:
+
+        vol=max(
+            float(brent.get("volatility",50)),
+            float(wti.get("volatility",50))
+        )
+
+        if vol<20:
+            volatility=95
+        elif vol<30:
+            volatility=85
+        elif vol<40:
+            volatility=70
+        elif vol<55:
+            volatility=55
+        else:
+            volatility=35
+
+    except:
+        pass
+
+    try:
+
+        news=round(
+            adaptive_news["weight"]*100
+        )
+
+    except:
+        pass
+
+    try:
+
+        if similar_cases is not None:
+
+            history=min(
+                100,
+                max(
+                    40,
+                    float(similar_cases)
+                )
+            )
+
+    except:
+        pass
+
+    try:
+
+        if validation is not None:
+
+            validation_score=min(
+                100,
+                max(
+                    40,
+                    float(validation)
+                )
+            )
+
+    except:
+        pass
+
+    final_score=round(
+
+        trend*0.20+
+        momentum*0.15+
+        volatility*0.15+
+        news*0.20+
+        history*0.15+
+        validation_score*0.15
+
+    )
+
+    if final_score>=85:
+        label="VERY HIGH"
+
+    elif final_score>=70:
+        label="HIGH"
+
+    elif final_score>=55:
+        label="MEDIUM"
+
+    elif final_score>=40:
+        label="LOW"
+
+    else:
+        label="VERY LOW"
+
+    return {
+
+        "score":final_score,
+        "label":label,
+
+        "Trend":round(trend),
+        "Momentum":round(momentum),
+        "Volatility":round(volatility),
+        "News":round(news),
+        "History":round(history),
+        "Validation":round(validation_score)
+
+    }
+
+
+def render_confidence_engine(result):
+
+    section(
+        "Confidence Engine",
+        "Explainable confidence decomposition"
+    )
+
+    c1,c2=st.columns([1,2])
+
+    with c1:
+
+        st.metric(
+            "Overall Confidence",
+            f'{result["score"]}%'
+        )
+
+        st.metric(
+            "Level",
+            result["label"]
+        )
+
+    with c2:
+
+        breakdown=pd.DataFrame({
+
+            "Component":[
+                "Trend",
+                "Momentum",
+                "Volatility",
+                "News",
+                "History",
+                "Validation"
+            ],
+
+            "Score":[
+                result["Trend"],
+                result["Momentum"],
+                result["Volatility"],
+                result["News"],
+                result["History"],
+                result["Validation"]
+            ]
+
+        })
+
+        st.dataframe(
+            breakdown,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Score":st.column_config.ProgressColumn(
+                    "Score",
+                    min_value=0,
+                    max_value=100
+                )
+            }
+        )
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -1905,7 +2109,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.4.1 · Adaptive News Weight Fix</div>
+    <div class="pe-release">Release 41.5 · Confidence Engine
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2363,42 +2567,12 @@ if signal_news is not None and not signal_news.empty:
 else:
     news_score = 0.0
 
-spread = None
-
-if (
-    brent["price"] is not None
-    and wti["price"] is not None
-):
-    spread = brent["price"] - wti["price"]
-
-market_volatility = max(
-    brent["volatility"],
-    wti["volatility"]
-)
-
-risk = (
-    "HIGH"
-    if market_volatility >= 45
-    else "MEDIUM"
-    if market_volatility >= 25
-    else "LOW"
-)
-
-provisional_regime = "TRANSITION"
-
-provisional_fallback = fallback_signal(
-    brent,
-    wti,
-    news_score=0.0
-)
-
-provisional_confidence = provisional_fallback[2]
 
 adaptive_news = calculate_adaptive_news_weight(
     news=signal_news,
     risk=risk,
-    regime=provisional_regime,
-    confidence=provisional_confidence
+    regime=regime,
+    confidence=confidence
 )
 
 adaptive_news_score = float(
@@ -2415,16 +2589,15 @@ signal, score, confidence, engine_result = existing_engine_signal(
     brent_df,
     wti_df,
     fallback,
-    news_score=adaptive_news_score
+    news_score=news_score
 )
 
-regime = (
-    engine_result
-    .get("components", {})
-    .get("regime", provisional_regime)
-    if isinstance(engine_result, dict)
-    else provisional_regime
-)
+spread = None
+if brent["price"] is not None and wti["price"] is not None:
+    spread = brent["price"] - wti["price"]
+
+risk = "HIGH" if max(brent["volatility"], wti["volatility"]) >= 45 else "MEDIUM" if max(brent["volatility"], wti["volatility"]) >= 25 else "LOW"
+regime = engine_result.get("components", {}).get("regime", "TRANSITION") if isinstance(engine_result, dict) else "TRANSITION"
 
 section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
 render_system_health(brent_df, wti_df, signal_news)
@@ -2620,6 +2793,20 @@ section(
 
 render_decision_journal()
 
+
+
+
+confidence_engine=calculate_confidence_engine(
+
+    brent,
+    wti,
+    adaptive_news
+
+)
+
+render_confidence_engine(
+    confidence_engine
+)
 
 section("System State", "Release 39 operating status")
 
