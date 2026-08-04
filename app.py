@@ -1265,6 +1265,264 @@ def render_executive_dashboard(
         )
 
 
+
+# PROCUREYE RELEASE 41.1 — DECISION JOURNAL FOUNDATION
+
+def _decision_journal_connection():
+    import sqlite3
+
+    db_path = Path("/tmp/procureye_decision_journal.db")
+    connection = sqlite3.connect(db_path)
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS decision_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_utc TEXT NOT NULL,
+            brent REAL,
+            wti REAL,
+            signal TEXT,
+            market_score INTEGER,
+            confidence TEXT,
+            risk TEXT,
+            regime TEXT,
+            news_score REAL,
+            news_count INTEGER
+        )
+        """
+    )
+
+    connection.commit()
+    return connection
+
+
+def _safe_journal_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def record_decision_journal(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    news
+):
+    from datetime import datetime, timezone
+
+    connection = _decision_journal_connection()
+
+    brent_price = _safe_journal_float(
+        brent.get("price") if isinstance(brent, dict) else None
+    )
+
+    wti_price = _safe_journal_float(
+        wti.get("price") if isinstance(wti, dict) else None
+    )
+
+    news_count = 0
+    news_score = 0.0
+
+    if news is not None and not news.empty:
+        news_count = int(len(news))
+
+        if "Impact" in news.columns:
+            news_score = float(
+                pd.to_numeric(
+                    news["Impact"],
+                    errors="coerce"
+                )
+                .fillna(0)
+                .mean()
+            )
+
+    now = datetime.now(timezone.utc)
+
+    previous = connection.execute(
+        """
+        SELECT
+            timestamp_utc,
+            brent,
+            wti,
+            signal,
+            market_score,
+            confidence,
+            news_score,
+            news_count
+        FROM decision_journal
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    should_insert = previous is None
+
+    if previous is not None:
+        try:
+            previous_time = datetime.fromisoformat(previous[0])
+            elapsed_minutes = (
+                now - previous_time
+            ).total_seconds() / 60
+        except Exception:
+            elapsed_minutes = 999
+
+        previous_brent = _safe_journal_float(previous[1])
+        previous_wti = _safe_journal_float(previous[2])
+
+        brent_changed = (
+            brent_price is not None
+            and previous_brent is not None
+            and abs(brent_price - previous_brent) >= 0.05
+        )
+
+        wti_changed = (
+            wti_price is not None
+            and previous_wti is not None
+            and abs(wti_price - previous_wti) >= 0.05
+        )
+
+        state_changed = any([
+            str(signal) != str(previous[3]),
+            int(score) != int(previous[4]),
+            str(confidence) != str(previous[5]),
+            abs(float(news_score) - float(previous[6] or 0)) >= 1,
+            int(news_count) != int(previous[7] or 0),
+        ])
+
+        should_insert = (
+            elapsed_minutes >= 15
+            or brent_changed
+            or wti_changed
+            or state_changed
+        )
+
+    if should_insert:
+        connection.execute(
+            """
+            INSERT INTO decision_journal (
+                timestamp_utc,
+                brent,
+                wti,
+                signal,
+                market_score,
+                confidence,
+                risk,
+                regime,
+                news_score,
+                news_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(),
+                brent_price,
+                wti_price,
+                str(signal),
+                int(score),
+                str(confidence),
+                str(risk),
+                str(regime),
+                round(news_score, 2),
+                news_count,
+            )
+        )
+
+        connection.commit()
+
+    connection.close()
+
+
+def render_decision_journal():
+    connection = _decision_journal_connection()
+
+    frame = pd.read_sql_query(
+        """
+        SELECT
+            timestamp_utc AS "Timestamp UTC",
+            brent AS "Brent",
+            wti AS "WTI",
+            signal AS "Signal",
+            market_score AS "Score",
+            confidence AS "Confidence",
+            risk AS "Risk",
+            regime AS "Regime",
+            news_score AS "News Score",
+            news_count AS "News Count"
+        FROM decision_journal
+        ORDER BY id DESC
+        LIMIT 50
+        """,
+        connection
+    )
+
+    total_rows = connection.execute(
+        "SELECT COUNT(*) FROM decision_journal"
+    ).fetchone()[0]
+
+    connection.close()
+
+    if frame.empty:
+        st.info("Decision Journal baseline awaiting first record.")
+        return
+
+    frame["Timestamp UTC"] = pd.to_datetime(
+        frame["Timestamp UTC"],
+        errors="coerce",
+        utc=True
+    ).dt.strftime("%d %b %Y · %H:%M UTC")
+
+    j1, j2, j3, j4 = st.columns(4)
+
+    with j1:
+        st.metric(
+            "Recorded Decisions",
+            int(total_rows)
+        )
+
+    with j2:
+        st.metric(
+            "Latest Signal",
+            str(frame.iloc[0]["Signal"])
+        )
+
+    with j3:
+        st.metric(
+            "Latest Score",
+            f"{int(frame.iloc[0]['Score'])}/100"
+        )
+
+    with j4:
+        st.metric(
+            "Latest Confidence",
+            str(frame.iloc[0]["Confidence"])
+        )
+
+    st.dataframe(
+        frame.head(20),
+        width="stretch",
+        hide_index=True
+    )
+
+    csv_data = frame.to_csv(
+        index=False
+    ).encode("utf-8")
+
+    st.download_button(
+        "Download Decision Journal CSV",
+        data=csv_data,
+        file_name="procureye_decision_journal.csv",
+        mime="text/csv",
+        key="download_decision_journal"
+    )
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -1416,7 +1674,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.10 · Final Stable MVP</div>
+    <div class="pe-release">Release 41.1 · Decision Journal Foundation</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2056,6 +2314,26 @@ st.dataframe(
         )
     }
 )
+
+
+
+record_decision_journal(
+    brent=brent,
+    wti=wti,
+    signal=signal,
+    score=score,
+    confidence=confidence,
+    risk=risk,
+    regime=regime,
+    news=news
+)
+
+section(
+    "Decision Journal",
+    "Recorded market decisions and changes"
+)
+
+render_decision_journal()
 
 
 section("System State", "Release 39 operating status")
