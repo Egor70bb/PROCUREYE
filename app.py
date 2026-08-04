@@ -1,4 +1,4 @@
-# PROCUREYE RELEASE 40.2 — NEWS-AWARE SIGNAL
+# PROCUREYE RELEASE 40.2.1 — NEWS-AWARE SIGNAL FIX
 
 # ===== EMBEDDED MODULE: professional_chart.py =====
 
@@ -759,7 +759,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.2 · News-Aware Signal</div>
+    <div class="pe-release">Release 40.2.1 · News-Aware Signal Fix</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -1144,7 +1144,7 @@ brent_df, wti_df = get_market_data()
 brent = metrics(brent_df)
 wti = metrics(wti_df)
 
-signal_news = signal_news.copy()
+signal_news = get_market_movers(limit=3)
 
 if signal_news is not None and not signal_news.empty:
     news_score = float(
