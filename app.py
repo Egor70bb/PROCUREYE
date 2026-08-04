@@ -1905,7 +1905,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.4 · Adaptive News Weight</div>
+    <div class="pe-release">Release 41.4.1 · Adaptive News Weight Fix</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2363,12 +2363,42 @@ if signal_news is not None and not signal_news.empty:
 else:
     news_score = 0.0
 
+spread = None
+
+if (
+    brent["price"] is not None
+    and wti["price"] is not None
+):
+    spread = brent["price"] - wti["price"]
+
+market_volatility = max(
+    brent["volatility"],
+    wti["volatility"]
+)
+
+risk = (
+    "HIGH"
+    if market_volatility >= 45
+    else "MEDIUM"
+    if market_volatility >= 25
+    else "LOW"
+)
+
+provisional_regime = "TRANSITION"
+
+provisional_fallback = fallback_signal(
+    brent,
+    wti,
+    news_score=0.0
+)
+
+provisional_confidence = provisional_fallback[2]
 
 adaptive_news = calculate_adaptive_news_weight(
     news=signal_news,
     risk=risk,
-    regime=regime,
-    confidence=confidence
+    regime=provisional_regime,
+    confidence=provisional_confidence
 )
 
 adaptive_news_score = float(
@@ -2385,15 +2415,16 @@ signal, score, confidence, engine_result = existing_engine_signal(
     brent_df,
     wti_df,
     fallback,
-    news_score=news_score
+    news_score=adaptive_news_score
 )
 
-spread = None
-if brent["price"] is not None and wti["price"] is not None:
-    spread = brent["price"] - wti["price"]
-
-risk = "HIGH" if max(brent["volatility"], wti["volatility"]) >= 45 else "MEDIUM" if max(brent["volatility"], wti["volatility"]) >= 25 else "LOW"
-regime = engine_result.get("components", {}).get("regime", "TRANSITION") if isinstance(engine_result, dict) else "TRANSITION"
+regime = (
+    engine_result
+    .get("components", {})
+    .get("regime", provisional_regime)
+    if isinstance(engine_result, dict)
+    else provisional_regime
+)
 
 section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
 render_system_health(brent_df, wti_df, signal_news)
