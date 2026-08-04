@@ -958,7 +958,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.4.2 · Signal Initialization Fix</div>
+    <div class="pe-release">Release 40.5 · Redundant Market Data</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -982,11 +982,79 @@ def section(title, subtitle):
     )
 
 
+
 def load_price_series(csv_name, ticker):
+    from urllib.parse import quote
+
+    safe_name = (
+        str(ticker)
+        .replace("=", "_")
+        .replace("^", "_")
+        .replace("/", "_")
+    )
+
+    fallback_file = Path("/tmp") / f"procureye_{safe_name}_fallback.csv"
+
+    def normalize(frame, date_col=None, close_col=None, source_name="UNKNOWN"):
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=["Date", "Close"])
+
+        data = frame.copy()
+
+        if date_col is None:
+            date_col = next(
+                (
+                    column for column in data.columns
+                    if str(column).lower()
+                    in {"date", "datetime", "timestamp"}
+                ),
+                data.columns[0]
+            )
+
+        if close_col is None:
+            close_col = next(
+                (
+                    column for column in data.columns
+                    if str(column).lower()
+                    in {"close", "adj close", "price"}
+                ),
+                None
+            )
+
+        if close_col is None:
+            return pd.DataFrame(columns=["Date", "Close"])
+
+        data = data[[date_col, close_col]].copy()
+        data.columns = ["Date", "Close"]
+
+        data["Date"] = pd.to_datetime(
+            data["Date"],
+            errors="coerce",
+            utc=True
+        ).dt.tz_localize(None)
+
+        data["Close"] = pd.to_numeric(
+            data["Close"],
+            errors="coerce"
+        )
+
+        data = (
+            data.dropna(subset=["Date", "Close"])
+            .drop_duplicates("Date")
+            .sort_values("Date")
+            .reset_index(drop=True)
+        )
+
+        if not data.empty:
+            data.attrs["source"] = source_name
+            data.attrs["status"] = "LIVE"
+
+        return data
+
     local_paths = [
         Path("/content") / csv_name,
-        Path(__file__).resolve().parent / csv_name,
-        Path(__file__).resolve().parent / "data" / csv_name,
+        Path.cwd() / csv_name,
+        Path.cwd() / "data" / csv_name
     ]
 
     for path in local_paths:
@@ -994,119 +1062,94 @@ def load_price_series(csv_name, ticker):
             continue
 
         try:
-            df = pd.read_csv(path)
-
-            date_col = next(
-                (
-                    c for c in df.columns
-                    if c.lower() in {"date", "datetime", "timestamp"}
-                ),
-                df.columns[0]
+            data = normalize(
+                pd.read_csv(path),
+                source_name=f"LOCAL:{path.name}"
             )
 
-            close_col = next(
-                (
-                    c for c in df.columns
-                    if c.lower() in {"close", "adj close", "price"}
-                ),
-                None
-            )
-
-            if close_col:
-                result = df[[date_col, close_col]].copy()
-                result.columns = ["Date", "Close"]
-                result["Date"] = pd.to_datetime(
-                    result["Date"],
-                    errors="coerce"
-                )
-                result["Close"] = pd.to_numeric(
-                    result["Close"],
-                    errors="coerce"
-                )
-                result = result.dropna().sort_values("Date")
-
-                if not result.empty:
-                    return result
-
+            if not data.empty:
+                data.to_csv(fallback_file, index=False)
+                return data
         except Exception:
             pass
 
-    try:
-        import requests
-        from urllib.parse import quote
+    symbol = quote(str(ticker), safe="")
 
-        symbol = quote(ticker, safe="")
-        urls = [
-            (
-                "https://query1.finance.yahoo.com/v8/finance/chart/"
-                f"{symbol}?range=6mo&interval=1d"
-            ),
-            (
-                "https://query2.finance.yahoo.com/v8/finance/chart/"
-                f"{symbol}?range=6mo&interval=1d"
-            ),
-        ]
+    yahoo_urls = [
+        (
+            "https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{symbol}?range=6mo&interval=1d"
+        ),
+        (
+            "https://query2.finance.yahoo.com/v8/finance/chart/"
+            f"{symbol}?range=6mo&interval=1d"
+        )
+    ]
 
-        for url in urls:
-            try:
-                response = requests.get(
-                    url,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
-                        ),
-                        "Accept": "application/json",
-                    },
-                    timeout=20
-                )
-                response.raise_for_status()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+        ),
+        "Accept": "application/json"
+    }
 
-                payload = response.json()
-                chart_result = payload.get("chart", {}).get("result")
+    for index, url in enumerate(yahoo_urls, start=1):
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=20
+            )
+            response.raise_for_status()
 
-                if not chart_result:
-                    continue
+            payload = response.json()
+            results = payload.get("chart", {}).get("result")
 
-                item = chart_result[0]
-                timestamps = item.get("timestamp", [])
-                closes = (
-                    item.get("indicators", {})
-                    .get("quote", [{}])[0]
-                    .get("close", [])
-                )
-
-                if not timestamps or not closes:
-                    continue
-
-                length = min(len(timestamps), len(closes))
-
-                frame = pd.DataFrame({
-                    "Date": pd.to_datetime(
-                        timestamps[:length],
-                        unit="s",
-                        utc=True,
-                        errors="coerce"
-                    ).tz_localize(None),
-                    "Close": pd.to_numeric(
-                        closes[:length],
-                        errors="coerce"
-                    )
-                }).dropna().sort_values("Date")
-
-                if not frame.empty:
-                    return frame
-
-            except Exception:
+            if not results:
                 continue
 
-    except Exception:
-        pass
+            item = results[0]
+            timestamps = item.get("timestamp", [])
+            closes = (
+                item.get("indicators", {})
+                .get("quote", [{}])[0]
+                .get("close", [])
+            )
+
+            length = min(len(timestamps), len(closes))
+
+            if length == 0:
+                continue
+
+            raw = pd.DataFrame({
+                "Date": pd.to_datetime(
+                    timestamps[:length],
+                    unit="s",
+                    utc=True,
+                    errors="coerce"
+                ),
+                "Close": closes[:length]
+            })
+
+            data = normalize(
+                raw,
+                date_col="Date",
+                close_col="Close",
+                source_name=f"YAHOO_QUERY_{index}"
+            )
+
+            if not data.empty:
+                data.to_csv(fallback_file, index=False)
+                return data
+
+        except Exception:
+            continue
 
     try:
         import yfinance as yf
 
-        result = yf.download(
+        raw = yf.download(
             ticker,
             period="6mo",
             interval="1d",
@@ -1116,30 +1159,48 @@ def load_price_series(csv_name, ticker):
             timeout=20
         )
 
-        if result is not None and not result.empty:
-            if isinstance(result.columns, pd.MultiIndex):
-                close = result["Close"].iloc[:, 0]
+        if raw is not None and not raw.empty:
+            if isinstance(raw.columns, pd.MultiIndex):
+                close = raw["Close"].iloc[:, 0]
             else:
-                close = result["Close"]
+                close = raw["Close"]
 
             frame = pd.DataFrame({
-                "Date": pd.to_datetime(
-                    close.index,
-                    errors="coerce"
-                ),
-                "Close": pd.to_numeric(
-                    close.to_numpy(),
-                    errors="coerce"
-                )
-            }).dropna().sort_values("Date")
+                "Date": close.index,
+                "Close": close.to_numpy()
+            })
 
-            if not frame.empty:
-                return frame
+            data = normalize(
+                frame,
+                date_col="Date",
+                close_col="Close",
+                source_name="YFINANCE"
+            )
+
+            if not data.empty:
+                data.to_csv(fallback_file, index=False)
+                return data
 
     except Exception:
         pass
 
-    return pd.DataFrame(columns=["Date", "Close"])
+    if fallback_file.exists():
+        try:
+            data = normalize(
+                pd.read_csv(fallback_file),
+                source_name="LAST_VALID_SNAPSHOT"
+            )
+
+            if not data.empty:
+                data.attrs["status"] = "FALLBACK"
+                return data
+        except Exception:
+            pass
+
+    unavailable = pd.DataFrame(columns=["Date", "Close"])
+    unavailable.attrs["source"] = "NONE"
+    unavailable.attrs["status"] = "UNAVAILABLE"
+    return unavailable
 
 
 @st.cache_data(ttl=300, show_spinner=False)
