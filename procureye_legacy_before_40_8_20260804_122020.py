@@ -1155,8 +1155,6 @@ import inspect
 
 
 
-from ui.executive_dashboard import render_executive_dashboard
-
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -1308,7 +1306,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 40.8 · Professional Dashboard</div>
+    <div class="pe-release">Release 40.7 · Modular Foundation</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -1786,17 +1784,46 @@ if brent["price"] is not None and wti["price"] is not None:
 risk = "HIGH" if max(brent["volatility"], wti["volatility"]) >= 45 else "MEDIUM" if max(brent["volatility"], wti["volatility"]) >= 25 else "LOW"
 regime = engine_result.get("components", {}).get("regime", "TRANSITION") if isinstance(engine_result, dict) else "TRANSITION"
 
+section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+render_system_health(brent_df, wti_df, signal_news)
 
-render_executive_dashboard(
-    brent=brent,
-    wti=wti,
-    signal=signal,
-    score=score,
-    confidence=confidence,
-    risk=risk,
-    regime=regime,
-    spread=spread,
+render_market_delta(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence
 )
+
+
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+
+with c1:
+    st.metric(
+        "Brent",
+        f"${brent['price']:.2f}" if brent["price"] is not None else "N/A",
+        f"{brent['change']:+.2f}%" if brent["change"] is not None else None
+    )
+
+with c2:
+    st.metric(
+        "WTI",
+        f"${wti['price']:.2f}" if wti["price"] is not None else "N/A",
+        f"{wti['change']:+.2f}%" if wti["change"] is not None else None
+    )
+
+with c3:
+    st.metric("Signal", signal)
+
+with c4:
+    st.metric("Market Score", f"{score}/100")
+
+with c5:
+    st.metric("Confidence", confidence)
+
+with c6:
+    st.metric("Risk", risk)
 
 section("Market Intelligence", "Brent and WTI interactive history")
 
