@@ -1524,412 +1524,233 @@ def render_decision_journal():
 
 
 
-# PROCUREYE RELEASE 41.3 — OUTCOME VALIDATION
+# PROCUREYE RELEASE 41.4 — ADAPTIVE NEWS WEIGHT
 
-def _ensure_outcome_columns(connection):
-    existing = {
-        row[1]
-        for row in connection.execute(
-            "PRAGMA table_info(decision_journal)"
-        ).fetchall()
-    }
-
-    required = {
-        "return_1h": "REAL",
-        "return_4h": "REAL",
-        "return_24h": "REAL",
-        "outcome_1h": "TEXT",
-        "outcome_4h": "TEXT",
-        "outcome_24h": "TEXT",
-    }
-
-    for column, column_type in required.items():
-        if column not in existing:
-            connection.execute(
-                f"ALTER TABLE decision_journal "
-                f"ADD COLUMN {column} {column_type}"
-            )
-
-    connection.commit()
-
-
-def _combined_market_return(
-    initial_brent,
-    future_brent,
-    initial_wti,
-    future_wti
+def calculate_adaptive_news_weight(
+    news,
+    risk,
+    regime,
+    confidence
 ):
-    returns = []
+    result = {
+        "raw_score": 0.0,
+        "effective_score": 0.0,
+        "weight": 0.0,
+        "quality": 0.0,
+        "diversity": 0.0,
+        "dominant_driver": "NONE",
+        "direction": "NEUTRAL",
+        "sample_size": 0,
+        "explanation": "No live news evidence is available."
+    }
 
-    try:
-        if (
-            initial_brent is not None
-            and future_brent is not None
-            and float(initial_brent) != 0
-        ):
-            returns.append(
-                (
-                    float(future_brent)
-                    / float(initial_brent)
-                    - 1
-                ) * 100
-            )
-    except Exception:
-        pass
+    if news is None or news.empty:
+        return result
 
-    try:
-        if (
-            initial_wti is not None
-            and future_wti is not None
-            and float(initial_wti) != 0
-        ):
-            returns.append(
-                (
-                    float(future_wti)
-                    / float(initial_wti)
-                    - 1
-                ) * 100
-            )
-    except Exception:
-        pass
+    if "Impact" not in news.columns:
+        return result
 
-    if not returns:
-        return None
+    frame = news.copy()
 
-    return sum(returns) / len(returns)
+    frame["Impact"] = pd.to_numeric(
+        frame["Impact"],
+        errors="coerce"
+    ).fillna(0.0)
 
+    if "Confidence" in frame.columns:
+        frame["Confidence"] = pd.to_numeric(
+            frame["Confidence"],
+            errors="coerce"
+        ).fillna(40.0).clip(0, 100)
+    else:
+        frame["Confidence"] = 40.0
 
-def _classify_signal_outcome(signal, market_return):
-    if market_return is None:
-        return None
-
-    clean_signal = (
-        str(signal)
-        .replace("🟢", "")
-        .replace("🔴", "")
-        .replace("🟡", "")
-        .upper()
-        .strip()
-    )
-
-    threshold = 0.20
-
-    if "LONG" in clean_signal:
-        return (
-            "CORRECT"
-            if market_return >= threshold
-            else "WRONG"
-        )
-
-    if "SHORT" in clean_signal:
-        return (
-            "CORRECT"
-            if market_return <= -threshold
-            else "WRONG"
-        )
-
-    if "WAIT" in clean_signal:
-        return (
-            "CORRECT"
-            if abs(market_return) < threshold
-            else "MISSED MOVE"
-        )
-
-    return "UNCLASSIFIED"
-
-
-def update_decision_outcomes():
-    from datetime import datetime, timezone, timedelta
-
-    connection = _decision_journal_connection()
-    _ensure_outcome_columns(connection)
-
-    rows = connection.execute(
-        """
-        SELECT
-            id,
-            timestamp_utc,
-            brent,
-            wti,
-            signal,
-            return_1h,
-            return_4h,
-            return_24h
-        FROM decision_journal
-        ORDER BY timestamp_utc ASC
-        """
-    ).fetchall()
-
-    horizons = [
-        (
-            "1h",
-            timedelta(hours=1),
-            timedelta(hours=2),
-            5,
-            6
-        ),
-        (
-            "4h",
-            timedelta(hours=4),
-            timedelta(hours=6),
-            6,
-            7
-        ),
-        (
-            "24h",
-            timedelta(hours=24),
-            timedelta(hours=30),
-            7,
-            8
-        ),
-    ]
-
-    updates = 0
-
-    for row in rows:
-        (
-            row_id,
-            timestamp_text,
-            initial_brent,
-            initial_wti,
-            signal,
-            return_1h,
-            return_4h,
-            return_24h,
-        ) = row
-
-        try:
-            initial_time = datetime.fromisoformat(timestamp_text)
-
-            if initial_time.tzinfo is None:
-                initial_time = initial_time.replace(
-                    tzinfo=timezone.utc
-                )
-
-        except Exception:
-            continue
-
-        existing_returns = {
-            "1h": return_1h,
-            "4h": return_4h,
-            "24h": return_24h,
-        }
-
-        for (
-            horizon_name,
-            target_delta,
-            maximum_delta,
-            _,
-            _
-        ) in horizons:
-            if existing_returns[horizon_name] is not None:
-                continue
-
-            target_time = initial_time + target_delta
-            maximum_time = initial_time + maximum_delta
-
-            future = connection.execute(
-                """
-                SELECT
-                    brent,
-                    wti,
-                    timestamp_utc
-                FROM decision_journal
-                WHERE timestamp_utc >= ?
-                  AND timestamp_utc <= ?
-                ORDER BY timestamp_utc ASC
-                LIMIT 1
-                """,
-                (
-                    target_time.isoformat(),
-                    maximum_time.isoformat(),
-                )
-            ).fetchone()
-
-            if future is None:
-                continue
-
-            future_brent, future_wti, _ = future
-
-            market_return = _combined_market_return(
-                initial_brent,
-                future_brent,
-                initial_wti,
-                future_wti
-            )
-
-            if market_return is None:
-                continue
-
-            outcome = _classify_signal_outcome(
-                signal,
-                market_return
-            )
-
-            return_column = f"return_{horizon_name}"
-            outcome_column = f"outcome_{horizon_name}"
-
-            connection.execute(
-                f"""
-                UPDATE decision_journal
-                SET {return_column} = ?,
-                    {outcome_column} = ?
-                WHERE id = ?
-                """,
-                (
-                    round(market_return, 4),
-                    outcome,
-                    row_id,
-                )
-            )
-
-            updates += 1
-
-    connection.commit()
-    connection.close()
-
-    return updates
-
-
-def render_outcome_validation():
-    update_decision_outcomes()
-
-    connection = _decision_journal_connection()
-    _ensure_outcome_columns(connection)
-
-    frame = pd.read_sql_query(
-        """
-        SELECT
-            timestamp_utc AS "Timestamp UTC",
-            signal AS "Signal",
-            market_score AS "Score",
-            confidence AS "Confidence",
-            return_1h AS "Return 1H",
-            outcome_1h AS "Outcome 1H",
-            return_4h AS "Return 4H",
-            outcome_4h AS "Outcome 4H",
-            return_24h AS "Return 24H",
-            outcome_24h AS "Outcome 24H"
-        FROM decision_journal
-        ORDER BY id DESC
-        LIMIT 100
-        """,
-        connection
-    )
-
-    connection.close()
+    frame = frame[
+        frame["Impact"].notna()
+    ].copy()
 
     if frame.empty:
-        st.info(
-            "Outcome Validation awaits sufficient historical observations."
-        )
-        return
+        return result
 
-    def horizon_stats(outcome_column):
-        valid = frame[
-            frame[outcome_column].notna()
-        ]
+    confidence_weights = (
+        frame["Confidence"]
+        .clip(lower=10)
+        / 100
+    )
 
-        if valid.empty:
-            return 0, None
+    weighted_denominator = confidence_weights.sum()
 
-        correct = int(
-            (valid[outcome_column] == "CORRECT").sum()
-        )
-
-        accuracy = (
-            correct / len(valid) * 100
-            if len(valid) > 0
-            else None
-        )
-
-        return len(valid), accuracy
-
-    count_1h, accuracy_1h = horizon_stats("Outcome 1H")
-    count_4h, accuracy_4h = horizon_stats("Outcome 4H")
-    count_24h, accuracy_24h = horizon_stats("Outcome 24H")
-
-    v1, v2, v3, v4 = st.columns(4)
-
-    with v1:
-        st.metric(
-            "Validated 1H",
-            count_1h
-        )
-
-    with v2:
-        st.metric(
-            "Accuracy 1H",
+    if weighted_denominator > 0:
+        raw_score = float(
             (
-                f"{accuracy_1h:.1f}%"
-                if accuracy_1h is not None
-                else "N/A"
+                frame["Impact"]
+                * confidence_weights
+            ).sum()
+            / weighted_denominator
+        )
+    else:
+        raw_score = float(
+            frame["Impact"].mean()
+        )
+
+    sample_size = int(len(frame))
+
+    average_confidence = float(
+        frame["Confidence"].mean()
+    )
+
+    quality = max(
+        0.25,
+        min(1.0, average_confidence / 100)
+    )
+
+    if "Driver" in frame.columns:
+        valid_drivers = (
+            frame["Driver"]
+            .fillna("UNKNOWN")
+            .astype(str)
+        )
+
+        unique_drivers = int(
+            valid_drivers.nunique()
+        )
+
+        dominant_driver = str(
+            valid_drivers.value_counts().index[0]
+        )
+
+        diversity = min(
+            1.0,
+            unique_drivers / 3
+        )
+    else:
+        unique_drivers = 1
+        dominant_driver = "OIL MARKET"
+        diversity = 0.35
+
+    sample_factor = min(
+        1.0,
+        sample_size / 3
+    )
+
+    regime_text = str(regime).upper()
+    risk_text = str(risk).upper()
+    confidence_text = str(confidence).upper()
+
+    regime_factor = {
+        "BULLISH": 1.00,
+        "BEARISH": 1.00,
+        "TRANSITION": 0.75,
+        "UNKNOWN": 0.55
+    }.get(regime_text, 0.70)
+
+    risk_factor = {
+        "LOW": 1.00,
+        "MEDIUM": 0.90,
+        "HIGH": 0.72
+    }.get(risk_text, 0.80)
+
+    system_confidence_factor = {
+        "HIGH": 1.00,
+        "MEDIUM": 0.85,
+        "LOW": 0.65
+    }.get(confidence_text, 0.70)
+
+    weight = (
+        quality * 0.35
+        + diversity * 0.20
+        + sample_factor * 0.15
+        + regime_factor * 0.10
+        + risk_factor * 0.10
+        + system_confidence_factor * 0.10
+    )
+
+    weight = max(
+        0.20,
+        min(1.0, weight)
+    )
+
+    effective_score = raw_score * weight
+
+    effective_score = max(
+        -100.0,
+        min(100.0, effective_score)
+    )
+
+    if effective_score >= 8:
+        direction = "BULLISH"
+    elif effective_score <= -8:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    explanation = (
+        f"{sample_size} market-moving item(s), "
+        f"{unique_drivers} distinct driver(s), "
+        f"average source confidence {average_confidence:.0f}%. "
+        f"Adaptive news weight {weight:.2f}."
+    )
+
+    result.update({
+        "raw_score": round(raw_score, 2),
+        "effective_score": round(effective_score, 2),
+        "weight": round(weight, 3),
+        "quality": round(quality, 3),
+        "diversity": round(diversity, 3),
+        "dominant_driver": dominant_driver,
+        "direction": direction,
+        "sample_size": sample_size,
+        "explanation": explanation
+    })
+
+    return result
+
+
+def render_adaptive_news_weight(
+    adaptive_news
+):
+    n1, n2, n3, n4 = st.columns(4)
+
+    with n1:
+        st.metric(
+            "Raw News Score",
+            f"{adaptive_news['raw_score']:+.1f}"
+        )
+
+    with n2:
+        st.metric(
+            "Effective News Score",
+            f"{adaptive_news['effective_score']:+.1f}"
+        )
+
+    with n3:
+        st.metric(
+            "Adaptive Weight",
+            f"{adaptive_news['weight']:.2f}"
+        )
+
+    with n4:
+        st.metric(
+            "News Direction",
+            adaptive_news["direction"]
+        )
+
+    st.progress(
+        int(
+            max(
+                0,
+                min(
+                    100,
+                    adaptive_news["weight"] * 100
+                )
             )
         )
-
-    with v3:
-        st.metric(
-            "Accuracy 4H",
-            (
-                f"{accuracy_4h:.1f}%"
-                if accuracy_4h is not None
-                else "N/A"
-            )
-        )
-
-    with v4:
-        st.metric(
-            "Accuracy 24H",
-            (
-                f"{accuracy_24h:.1f}%"
-                if accuracy_24h is not None
-                else "N/A"
-            )
-        )
-
-    display = frame[
-        frame[
-            [
-                "Outcome 1H",
-                "Outcome 4H",
-                "Outcome 24H"
-            ]
-        ].notna().any(axis=1)
-    ].head(20).copy()
-
-    if display.empty:
-        st.caption(
-            "No outcome horizon is mature yet. "
-            "Keep PROCUREYE active and revisit after 1–24 hours."
-        )
-        return
-
-    display["Timestamp UTC"] = pd.to_datetime(
-        display["Timestamp UTC"],
-        errors="coerce",
-        utc=True
-    ).dt.strftime("%d %b %Y · %H:%M UTC")
-
-    for column in [
-        "Return 1H",
-        "Return 4H",
-        "Return 24H"
-    ]:
-        display[column] = pd.to_numeric(
-            display[column],
-            errors="coerce"
-        ).round(2)
-
-    st.dataframe(
-        display,
-        width="stretch",
-        hide_index=True
     )
 
     st.caption(
-        "A LONG is correct when the combined Brent/WTI return "
-        "is at least +0.20%; a SHORT when it is at most -0.20%; "
-        "WAIT is correct when the absolute move remains below 0.20%."
+        f"Dominant driver: "
+        f"{adaptive_news['dominant_driver']} · "
+        f"{adaptive_news['explanation']}"
     )
 
 
@@ -2084,7 +1905,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.3 · Outcome Validation</div>
+    <div class="pe-release">Release 41.4 · Adaptive News Weight</div>
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2542,10 +2363,22 @@ if signal_news is not None and not signal_news.empty:
 else:
     news_score = 0.0
 
+
+adaptive_news = calculate_adaptive_news_weight(
+    news=signal_news,
+    risk=risk,
+    regime=regime,
+    confidence=confidence
+)
+
+adaptive_news_score = float(
+    adaptive_news["effective_score"]
+)
+
 fallback = fallback_signal(
     brent,
     wti,
-    news_score=news_score
+    news_score=adaptive_news_score
 )
 
 signal, score, confidence, engine_result = existing_engine_signal(
@@ -2738,21 +2571,23 @@ record_decision_journal(
     news=news
 )
 
+
+section(
+    "Adaptive News Weight",
+    "Controlled contribution of live news to the Market Score"
+)
+
+render_adaptive_news_weight(
+    adaptive_news
+)
+
+
 section(
     "Decision Journal",
     "Recorded market decisions and changes"
 )
 
 render_decision_journal()
-
-
-
-section(
-    "Outcome Validation",
-    "Observed market performance after PROCUREYE decisions"
-)
-
-render_outcome_validation()
 
 
 section("System State", "Release 39 operating status")
