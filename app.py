@@ -2433,6 +2433,194 @@ def render_driver_intelligence_panel(report):
 
 
 
+
+# PROCUREYE RELEASE 42.2 DEV — MARKET MOVERS RANKING PRO
+
+def build_market_movers_ranking(news, limit=10):
+    columns = [
+        "Rank",
+        "Headline",
+        "Driver",
+        "Direction",
+        "Impact",
+        "Confidence",
+        "Importance",
+        "Source",
+        "Published",
+    ]
+
+    if news is None or news.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame = news.copy()
+
+    defaults = {
+        "Title": "Untitled market event",
+        "Driver": "OIL MARKET",
+        "Bias": "NEUTRAL",
+        "Impact": 0.0,
+        "Confidence": 0.0,
+        "Importance": 0.0,
+        "Source": "UNKNOWN",
+        "Published": "N/A",
+        "AgeHours": 999.0,
+    }
+
+    for column, default in defaults.items():
+        if column not in frame.columns:
+            frame[column] = default
+
+    for column in [
+        "Impact",
+        "Confidence",
+        "Importance",
+        "AgeHours",
+    ]:
+        frame[column] = pd.to_numeric(
+            frame[column],
+            errors="coerce"
+        ).fillna(defaults[column])
+
+    frame["Freshness Score"] = (
+        100 - frame["AgeHours"].clip(0, 100)
+    )
+
+    frame["Ranking Score"] = (
+        frame["Impact"].abs() * 0.40
+        + frame["Confidence"] * 0.25
+        + frame["Importance"] * 0.25
+        + frame["Freshness Score"] * 0.10
+    ).clip(0, 100)
+
+    frame["Direction"] = (
+        frame["Bias"]
+        .fillna("NEUTRAL")
+        .astype(str)
+        .str.upper()
+    )
+
+    frame = (
+        frame.sort_values(
+            [
+                "Ranking Score",
+                "Confidence",
+                "Importance",
+            ],
+            ascending=False
+        )
+        .drop_duplicates(
+            subset=["Title"],
+            keep="first"
+        )
+        .head(int(limit))
+        .reset_index(drop=True)
+    )
+
+    frame.insert(
+        0,
+        "Rank",
+        range(1, len(frame) + 1)
+    )
+
+    result = frame.rename(
+        columns={
+            "Title": "Headline",
+        }
+    )
+
+    result["Impact"] = result["Impact"].round(1)
+    result["Confidence"] = result["Confidence"].round(0).astype(int)
+    result["Importance"] = result["Importance"].round(1)
+    result["Ranking Score"] = result["Ranking Score"].round(1)
+
+    return result[
+        [
+            "Rank",
+            "Headline",
+            "Driver",
+            "Direction",
+            "Ranking Score",
+            "Impact",
+            "Confidence",
+            "Importance",
+            "Source",
+            "Published",
+        ]
+    ]
+
+
+def render_market_movers_ranking(ranking):
+    section(
+        "Market Movers Ranking Pro",
+        "Top live events ranked by impact, confidence, importance and freshness"
+    )
+
+    if ranking is None or ranking.empty:
+        st.info(
+            "Market Movers Ranking awaits live news evidence."
+        )
+        return
+
+    leader = ranking.iloc[0]
+
+    r1, r2, r3, r4 = st.columns(4)
+
+    with r1:
+        st.metric(
+            "Leading Driver",
+            str(leader["Driver"])
+        )
+
+    with r2:
+        st.metric(
+            "Direction",
+            str(leader["Direction"])
+        )
+
+    with r3:
+        st.metric(
+            "Ranking Score",
+            f"{float(leader['Ranking Score']):.1f}/100"
+        )
+
+    with r4:
+        st.metric(
+            "Events Ranked",
+            int(len(ranking))
+        )
+
+    st.dataframe(
+        ranking,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Ranking Score": st.column_config.ProgressColumn(
+                "Ranking Score",
+                min_value=0,
+                max_value=100,
+                format="%.1f"
+            ),
+            "Confidence": st.column_config.ProgressColumn(
+                "Confidence",
+                min_value=0,
+                max_value=100,
+                format="%d%%"
+            ),
+            "Impact": st.column_config.NumberColumn(
+                "Impact",
+                format="%+.1f"
+            ),
+        }
+    )
+
+    st.caption(
+        "Ranking Score = 40% absolute impact + 25% confidence "
+        "+ 25% importance + 10% freshness."
+    )
+
+# END PROCUREYE RELEASE 42.2 DEV
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -2584,7 +2772,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 42.1 · Driver Intelligence
+    <div class="pe-release">Release 42.2 · Market Movers Ranking Pro
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -3287,6 +3475,15 @@ def run_procureye_dashboard():
 
 
 
+
+    market_movers_ranking = build_market_movers_ranking(
+        news=news,
+        limit=10
+    )
+
+    render_market_movers_ranking(
+        market_movers_ranking
+    )
 
     driver_intelligence = analyze_driver_intelligence(news)
 
