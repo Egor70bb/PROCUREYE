@@ -3564,6 +3564,512 @@ def render_confidence_intelligence_v2(report):
 # END PROCUREYE RELEASE 42.5 DEV
 
 
+
+# PROCUREYE RELEASE 42.6 DEV — EXPLAINABLE DECISION INTELLIGENCE 2.0
+
+def build_explainable_decision_v2(
+    signal,
+    score,
+    risk,
+    regime,
+    brent,
+    wti,
+    driver_report,
+    correlation_report,
+    historical_memory,
+    confidence_v2,
+    ranking
+):
+    def numeric(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+    brent_trend = str(
+        brent.get("trend", "UNKNOWN")
+        if isinstance(brent, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    wti_trend = str(
+        wti.get("trend", "UNKNOWN")
+        if isinstance(wti, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    brent_momentum = numeric(
+        brent.get("momentum", 0)
+        if isinstance(brent, dict)
+        else 0
+    )
+
+    wti_momentum = numeric(
+        wti.get("momentum", 0)
+        if isinstance(wti, dict)
+        else 0
+    )
+
+    dominant_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+        if isinstance(driver_report, dict)
+        else "NONE"
+    )
+
+    driver_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(driver_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    driver_strength = int(
+        driver_report.get("strength", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    driver_confidence = int(
+        driver_report.get("confidence", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    correlation_state = str(
+        correlation_report.get(
+            "state",
+            "UNKNOWN"
+        )
+        if isinstance(correlation_report, dict)
+        else "UNKNOWN"
+    )
+
+    combined_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(correlation_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    alignment = int(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    contradictions = int(
+        correlation_report.get(
+            "contradictions",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    historical_samples = int(
+        historical_memory.get("total", 0)
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    historical_driver = str(
+        historical_memory.get(
+            "main_driver",
+            "NONE"
+        )
+        if isinstance(historical_memory, dict)
+        else "NONE"
+    )
+
+    historical_alignment = int(
+        historical_memory.get(
+            "average_alignment",
+            0
+        )
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    confidence_score = int(
+        confidence_v2.get("score", 0)
+        if isinstance(confidence_v2, dict)
+        else 0
+    )
+
+    confidence_level = str(
+        confidence_v2.get(
+            "level",
+            "UNKNOWN"
+        )
+        if isinstance(confidence_v2, dict)
+        else "UNKNOWN"
+    )
+
+    evidence = []
+    risks = []
+    invalidation = []
+
+    if brent_trend not in {"UNKNOWN", "NEUTRAL"}:
+        evidence.append({
+            "Factor": "Brent trend",
+            "Direction": brent_trend,
+            "Evidence": (
+                f"Brent trend is {brent_trend.lower()}."
+            ),
+            "Weight": 18,
+        })
+
+    if wti_trend not in {"UNKNOWN", "NEUTRAL"}:
+        evidence.append({
+            "Factor": "WTI trend",
+            "Direction": wti_trend,
+            "Evidence": (
+                f"WTI trend is {wti_trend.lower()}."
+            ),
+            "Weight": 16,
+        })
+
+    momentum_direction = (
+        "BULLISH"
+        if brent_momentum > 0
+        and wti_momentum > 0
+        else "BEARISH"
+        if brent_momentum < 0
+        and wti_momentum < 0
+        else "MIXED"
+    )
+
+    evidence.append({
+        "Factor": "Momentum",
+        "Direction": momentum_direction,
+        "Evidence": (
+            f"Brent momentum {brent_momentum:+.2f}% · "
+            f"WTI momentum {wti_momentum:+.2f}%."
+        ),
+        "Weight": 18,
+    })
+
+    evidence.append({
+        "Factor": dominant_driver,
+        "Direction": driver_direction,
+        "Evidence": (
+            f"Dominant driver strength {driver_strength}/100 "
+            f"with confidence {driver_confidence}%."
+        ),
+        "Weight": 20,
+    })
+
+    evidence.append({
+        "Factor": "Driver correlation",
+        "Direction": combined_direction,
+        "Evidence": (
+            f"{correlation_state}; alignment {alignment}%."
+        ),
+        "Weight": 16,
+    })
+
+    if historical_samples > 0:
+        evidence.append({
+            "Factor": "Historical memory",
+            "Direction": combined_direction,
+            "Evidence": (
+                f"{historical_samples} observations; "
+                f"main driver {historical_driver}; "
+                f"average alignment {historical_alignment}%."
+            ),
+            "Weight": 12,
+        })
+
+    top_headline = "No ranked headline available."
+    top_direction = "NEUTRAL"
+
+    if (
+        isinstance(ranking, pd.DataFrame)
+        and not ranking.empty
+    ):
+        leader = ranking.iloc[0]
+
+        top_headline = str(
+            leader.get(
+                "Headline",
+                top_headline
+            )
+        )
+
+        top_direction = str(
+            leader.get(
+                "Direction",
+                "NEUTRAL"
+            )
+        ).upper()
+
+        evidence.append({
+            "Factor": "Top market mover",
+            "Direction": top_direction,
+            "Evidence": top_headline,
+            "Weight": 14,
+        })
+
+    if str(risk).upper() == "HIGH":
+        risks.append(
+            "Market volatility and risk conditions are high."
+        )
+
+    if contradictions > 0:
+        risks.append(
+            f"{contradictions} opposing driver(s) reduce signal reliability."
+        )
+
+    if alignment < 50:
+        risks.append(
+            "Driver alignment is below 50%."
+        )
+
+    if confidence_score < 50:
+        risks.append(
+            "Confidence Intelligence v2 is below 50%."
+        )
+
+    if brent_trend != wti_trend:
+        risks.append(
+            "Brent and WTI trends are not fully aligned."
+        )
+
+    if historical_samples < 5:
+        risks.append(
+            "Historical driver memory is still limited."
+        )
+
+    if clean_signal == "LONG":
+        invalidation.extend([
+            "Brent and WTI momentum turning negative.",
+            "Dominant driver changing to BEARISH.",
+            "Driver alignment falling below 45%.",
+        ])
+    elif clean_signal == "SHORT":
+        invalidation.extend([
+            "Brent and WTI momentum turning positive.",
+            "Dominant driver changing to BULLISH.",
+            "Driver alignment falling below 45%.",
+        ])
+    else:
+        invalidation.extend([
+            "Trend, momentum and drivers becoming strongly aligned.",
+            "Confidence Intelligence rising above 65%.",
+        ])
+
+    matching_direction = {
+        "LONG": "BULLISH",
+        "SHORT": "BEARISH",
+        "WAIT": "NEUTRAL",
+    }.get(clean_signal, "NEUTRAL")
+
+    supportive = sum(
+        1
+        for item in evidence
+        if item["Direction"] == matching_direction
+    )
+
+    opposing = sum(
+        1
+        for item in evidence
+        if (
+            item["Direction"]
+            not in {
+                matching_direction,
+                "NEUTRAL",
+                "MIXED",
+                "UNKNOWN",
+            }
+        )
+    )
+
+    weighted_support = sum(
+        item["Weight"]
+        for item in evidence
+        if item["Direction"] == matching_direction
+    )
+
+    weighted_opposition = sum(
+        item["Weight"]
+        for item in evidence
+        if (
+            item["Direction"]
+            not in {
+                matching_direction,
+                "NEUTRAL",
+                "MIXED",
+                "UNKNOWN",
+            }
+        )
+    )
+
+    net_explanation_score = int(
+        max(
+            0,
+            min(
+                100,
+                50
+                + weighted_support
+                - weighted_opposition
+                + (confidence_score - 50) * 0.30
+            )
+        )
+    )
+
+    if clean_signal == "WAIT":
+        executive_summary = (
+            f"PROCUREYE maintains WAIT with Market Score "
+            f"{int(score)}/100. Evidence is not sufficiently "
+            f"aligned for a directional position."
+        )
+    else:
+        executive_summary = (
+            f"PROCUREYE indicates {clean_signal} with Market Score "
+            f"{int(score)}/100 and Confidence v2 "
+            f"{confidence_score}% ({confidence_level}). "
+            f"The dominant driver is {dominant_driver} "
+            f"({driver_direction}) and combined driver alignment "
+            f"is {alignment}%."
+        )
+
+    evidence_table = pd.DataFrame(evidence)
+
+    return {
+        "signal": clean_signal,
+        "executive_summary": executive_summary,
+        "confidence_score": confidence_score,
+        "confidence_level": confidence_level,
+        "explanation_score": net_explanation_score,
+        "supportive_factors": supportive,
+        "opposing_factors": opposing,
+        "evidence": evidence_table,
+        "risks": risks,
+        "invalidation": invalidation,
+        "top_headline": top_headline,
+        "regime": str(regime),
+        "risk": str(risk),
+    }
+
+
+def render_explainable_decision_v2(report):
+    section(
+        "Explainable Decision Intelligence 2.0",
+        "Why the signal exists, what supports it and what could invalidate it"
+    )
+
+    x1, x2, x3, x4 = st.columns(4)
+
+    with x1:
+        st.metric(
+            "Decision",
+            report.get("signal", "WAIT")
+        )
+
+    with x2:
+        st.metric(
+            "Confidence v2",
+            f"{int(report.get('confidence_score', 0))}%"
+        )
+
+    with x3:
+        st.metric(
+            "Explanation Score",
+            f"{int(report.get('explanation_score', 0))}/100"
+        )
+
+    with x4:
+        st.metric(
+            "Support / Opposition",
+            (
+                f"{int(report.get('supportive_factors', 0))}"
+                f" / "
+                f"{int(report.get('opposing_factors', 0))}"
+            )
+        )
+
+    st.info(
+        report.get(
+            "executive_summary",
+            "Decision explanation unavailable."
+        )
+    )
+
+    evidence = report.get("evidence")
+
+    if (
+        isinstance(evidence, pd.DataFrame)
+        and not evidence.empty
+    ):
+        st.markdown("#### Decision evidence")
+
+        st.dataframe(
+            evidence,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Weight":
+                    st.column_config.ProgressColumn(
+                        "Weight",
+                        min_value=0,
+                        max_value=25,
+                        format="%d"
+                    )
+            }
+        )
+
+    risks = report.get("risks", [])
+
+    st.markdown("#### Principal risks")
+
+    if risks:
+        for item in risks:
+            st.warning(item)
+    else:
+        st.success(
+            "No material contradiction or reliability warning detected."
+        )
+
+    invalidation = report.get(
+        "invalidation",
+        []
+    )
+
+    with st.expander(
+        "Signal invalidation conditions"
+    ):
+        for item in invalidation:
+            st.markdown(f"- {item}")
+
+    st.caption(
+        "Decision-support explanation only. "
+        "PROCUREYE does not execute trades."
+    )
+
+# END PROCUREYE RELEASE 42.6 DEV
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -3715,7 +4221,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 42.5 DEV · Confidence Intelligence v2
+    <div class="pe-release">Release 42.6 DEV · Explainable Decision Intelligence 2.0
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -4469,6 +4975,24 @@ def run_procureye_dashboard():
 
     render_confidence_intelligence_v2(
         confidence_intelligence_v2
+    )
+
+    explainable_decision_v2 = build_explainable_decision_v2(
+        signal=signal,
+        score=score,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        historical_memory=historical_driver_memory,
+        confidence_v2=confidence_intelligence_v2,
+        ranking=market_movers_ranking
+    )
+
+    render_explainable_decision_v2(
+        explainable_decision_v2
     )
 
     record_decision_journal(
