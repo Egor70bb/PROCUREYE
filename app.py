@@ -2178,6 +2178,261 @@ def render_driver_intelligence_panel(report):
     )
 
 
+
+# ============================================================
+# PROCUREYE RELEASE 42.1 DEV — DRIVER INTELLIGENCE
+# ============================================================
+
+def _di_number(value, default=0.0):
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _di_source_quality(source):
+    source = str(source or "").lower()
+
+    quality = {
+        "reuters": 1.00,
+        "bloomberg": 0.98,
+        "eia": 1.00,
+        "opec": 0.96,
+        "iea": 0.96,
+        "financial times": 0.92,
+        "wall street journal": 0.90,
+        "associated press": 0.86,
+        "cnbc": 0.82,
+        "marketwatch": 0.74,
+        "oilprice": 0.72,
+    }
+
+    matches = [
+        score
+        for name, score in quality.items()
+        if name in source
+    ]
+
+    return max(matches) if matches else 0.60
+
+
+def analyze_driver_intelligence(news):
+    columns = [
+        "Driver",
+        "Direction",
+        "Net Score",
+        "Strength",
+        "Confidence",
+        "Evidence",
+        "Sources",
+    ]
+
+    empty = {
+        "dominant_driver": "NONE",
+        "direction": "NEUTRAL",
+        "strength": 0,
+        "confidence": 0,
+        "evidence_count": 0,
+        "independent_sources": 0,
+        "reason": "No live driver evidence is available.",
+        "drivers": pd.DataFrame(columns=columns),
+    }
+
+    if news is None or news.empty:
+        return empty
+
+    evidence = []
+
+    for _, item in news.iterrows():
+        driver = str(
+            item.get("Driver", "OIL MARKET")
+        ).strip() or "OIL MARKET"
+
+        source_name = str(
+            item.get("Source", "UNKNOWN")
+        )
+
+        bias = str(
+            item.get("Bias", "NEUTRAL")
+        ).upper()
+
+        impact = _di_number(
+            item.get("Impact", 0.0)
+        )
+
+        item_confidence = _di_number(
+            item.get("Confidence", 50.0),
+            50.0
+        )
+
+        directional_impact = (
+            abs(impact)
+            if bias == "BULLISH"
+            else -abs(impact)
+            if bias == "BEARISH"
+            else impact
+        )
+
+        weighted_score = (
+            directional_impact
+            * _di_source_quality(source_name)
+            * max(
+                0.25,
+                min(1.0, item_confidence / 100)
+            )
+        )
+
+        evidence.append({
+            "Driver": driver,
+            "Source": source_name,
+            "Score": weighted_score,
+            "Confidence": item_confidence,
+        })
+
+    evidence_frame = pd.DataFrame(evidence)
+
+    if evidence_frame.empty:
+        return empty
+
+    rows = []
+
+    for driver, group in evidence_frame.groupby("Driver"):
+        net_score = float(group["Score"].sum())
+        evidence_count = int(len(group))
+        source_count = int(group["Source"].nunique())
+
+        average_confidence = float(
+            group["Confidence"].mean()
+        )
+
+        direction = (
+            "BULLISH"
+            if net_score >= 8
+            else "BEARISH"
+            if net_score <= -8
+            else "NEUTRAL"
+        )
+
+        strength = int(
+            min(
+                100,
+                abs(net_score)
+                + evidence_count * 8
+                + source_count * 6
+            )
+        )
+
+        confidence_score = int(
+            min(
+                98,
+                average_confidence * 0.70
+                + min(28, source_count * 9)
+            )
+        )
+
+        rows.append({
+            "Driver": driver,
+            "Direction": direction,
+            "Net Score": round(net_score, 1),
+            "Strength": strength,
+            "Confidence": confidence_score,
+            "Evidence": evidence_count,
+            "Sources": source_count,
+        })
+
+    drivers = (
+        pd.DataFrame(rows)
+        .sort_values(
+            ["Strength", "Confidence", "Evidence"],
+            ascending=False
+        )
+        .reset_index(drop=True)
+    )
+
+    dominant = drivers.iloc[0]
+
+    return {
+        "dominant_driver": str(dominant["Driver"]),
+        "direction": str(dominant["Direction"]),
+        "strength": int(dominant["Strength"]),
+        "confidence": int(dominant["Confidence"]),
+        "evidence_count": int(dominant["Evidence"]),
+        "independent_sources": int(dominant["Sources"]),
+        "reason": (
+            f"{dominant['Driver']} is the strongest current driver: "
+            f"{dominant['Direction']}, supported by "
+            f"{int(dominant['Evidence'])} evidence item(s) from "
+            f"{int(dominant['Sources'])} independent source(s)."
+        ),
+        "drivers": drivers,
+    }
+
+
+def render_driver_intelligence_panel(report):
+    section(
+        "Driver Intelligence",
+        "Structured evidence behind market direction"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Dominant Driver",
+            report.get("dominant_driver", "NONE")
+        )
+
+    with c2:
+        st.metric(
+            "Direction",
+            report.get("direction", "NEUTRAL")
+        )
+
+    with c3:
+        st.metric(
+            "Strength",
+            f"{int(report.get('strength', 0))}/100"
+        )
+
+    with c4:
+        st.metric(
+            "Confidence",
+            f"{int(report.get('confidence', 0))}%"
+        )
+
+    drivers = report.get("drivers")
+
+    if isinstance(drivers, pd.DataFrame) and not drivers.empty:
+        st.dataframe(
+            drivers,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Strength": st.column_config.ProgressColumn(
+                    "Strength",
+                    min_value=0,
+                    max_value=100,
+                    format="%d"
+                ),
+                "Confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    min_value=0,
+                    max_value=100,
+                    format="%d%%"
+                ),
+            }
+        )
+    else:
+        st.info(
+            "Driver Intelligence awaits live evidence."
+        )
+
+    st.caption(report.get("reason", ""))
+
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -2329,7 +2584,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 42.1B · Driver Intelligence
+    <div class="pe-release">Release 42.1 · Driver Intelligence
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -3032,6 +3287,12 @@ def run_procureye_dashboard():
 
 
 
+
+    driver_intelligence = analyze_driver_intelligence(news)
+
+    render_driver_intelligence_panel(
+        driver_intelligence
+    )
 
     record_decision_journal(
         brent=brent,
