@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from drivers.driver_intelligence import analyze_driver_intelligence
+# -*- coding: utf-8 -*-
 # PROCUREYE RELEASE 40.3 — COMPACT DELTA MONITOR
 
 # ===== EMBEDDED MODULE: professional_chart.py =====
@@ -2110,6 +2112,74 @@ def render_daily_market_brief(brief):
     st.info(brief["action"])
 
 
+
+def render_driver_intelligence_panel(report):
+    section(
+        "Driver Intelligence",
+        "Structured evidence behind market direction"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Dominant Driver",
+            report.get("dominant_driver", "NONE")
+        )
+
+    with c2:
+        st.metric(
+            "Direction",
+            report.get("direction", "NEUTRAL")
+        )
+
+    with c3:
+        st.metric(
+            "Strength",
+            f"{int(report.get('strength', 0))}/100"
+        )
+
+    with c4:
+        st.metric(
+            "Confidence",
+            f"{int(report.get('confidence', 0))}%"
+        )
+
+    drivers = report.get("drivers")
+
+    if (
+        isinstance(drivers, pd.DataFrame)
+        and not drivers.empty
+    ):
+        st.dataframe(
+            drivers,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Strength": st.column_config.ProgressColumn(
+                    "Strength",
+                    min_value=0,
+                    max_value=100,
+                    format="%d"
+                ),
+                "Confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    min_value=0,
+                    max_value=100,
+                    format="%d%%"
+                ),
+            }
+        )
+    else:
+        st.info(
+            "Driver Intelligence awaits live evidence."
+        )
+
+    st.caption(
+        report.get("reason", "")
+    )
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -2261,7 +2331,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.8.1 · Daily Market Brief
+    <div class="pe-release">Release 42.1B · Driver Intelligence
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2900,6 +2970,8 @@ def run_procureye_dashboard():
 
     news = get_market_movers(limit=3)
 
+
+    driver_intelligence = analyze_driver_intelligence(news)
     for index, row in news.iterrows():
         icon = (
             "🟢" if row["Bias"] == "BULLISH"
@@ -2962,6 +3034,10 @@ def run_procureye_dashboard():
     )
 
 
+
+    render_driver_intelligence_panel(
+        driver_intelligence
+    )
 
     record_decision_journal(
         brent=brent,
