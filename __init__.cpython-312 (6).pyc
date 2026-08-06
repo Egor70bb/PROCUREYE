@@ -1,0 +1,1907 @@
+"""PROCUREYE Release 42.0 — Architecture Freeze.
+
+Stable Streamlit orchestrator with separated operational modules.
+"""
+
+from charts.professional_chart import render_professional_chart
+from news.market_movers import get_market_movers
+from drivers.market_drivers import build_market_drivers
+from reasoning.why_signal import build_why_signal
+from monitor.market_delta import render_market_delta
+from health.system_health import render_system_health
+
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from pathlib import Path
+from datetime import datetime, timezone
+import inspect
+
+
+
+
+
+
+def render_executive_dashboard(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    spread,
+):
+    def price(value):
+        try:
+            if value is None:
+                return "N/A"
+            return f"${float(value):.2f}"
+        except Exception:
+            return "N/A"
+
+    def percent(value):
+        try:
+            if value is None:
+                return None
+            return f"{float(value):+.2f}%"
+        except Exception:
+            return None
+
+    updated = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
+    )
+
+    st.markdown(
+        """
+        <div class="pe-section">
+            <strong>Executive Dashboard</strong>
+            <span>Current market state</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.caption(f"Updated {updated}")
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+
+    with c1:
+        st.metric(
+            "Brent",
+            price(brent.get("price")),
+            percent(brent.get("change")),
+        )
+
+    with c2:
+        st.metric(
+            "WTI",
+            price(wti.get("price")),
+            percent(wti.get("change")),
+        )
+
+    with c3:
+        st.metric(
+            "Signal",
+            str(signal),
+        )
+
+    with c4:
+        st.metric(
+            "Market Score",
+            f"{int(score)}/100",
+        )
+
+    with c5:
+        st.metric(
+            "Confidence",
+            str(confidence),
+        )
+
+    with c6:
+        st.metric(
+            "Risk",
+            str(risk),
+        )
+
+    d1, d2, d3, d4 = st.columns(4)
+
+    with d1:
+        st.metric(
+            "Market Regime",
+            str(regime),
+        )
+
+    with d2:
+        st.metric(
+            "Brent Trend",
+            str(brent.get("trend", "UNKNOWN")),
+        )
+
+    with d3:
+        st.metric(
+            "WTI Trend",
+            str(wti.get("trend", "UNKNOWN")),
+        )
+
+    with d4:
+        st.metric(
+            "Brent-WTI Spread",
+            price(spread),
+        )
+
+
+
+# PROCUREYE RELEASE 41.1 — DECISION JOURNAL FOUNDATION
+
+def _decision_journal_connection():
+    import sqlite3
+
+    db_path = Path("/tmp/procureye_decision_journal.db")
+    connection = sqlite3.connect(db_path)
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS decision_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_utc TEXT NOT NULL,
+            brent REAL,
+            wti REAL,
+            signal TEXT,
+            market_score INTEGER,
+            confidence TEXT,
+            risk TEXT,
+            regime TEXT,
+            news_score REAL,
+            news_count INTEGER
+        )
+        """
+    )
+
+    connection.commit()
+    return connection
+
+
+def _safe_journal_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def record_decision_journal(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    news
+):
+    from datetime import datetime, timezone
+
+    connection = _decision_journal_connection()
+
+    brent_price = _safe_journal_float(
+        brent.get("price") if isinstance(brent, dict) else None
+    )
+
+    wti_price = _safe_journal_float(
+        wti.get("price") if isinstance(wti, dict) else None
+    )
+
+    news_count = 0
+    news_score = 0.0
+
+    if news is not None and not news.empty:
+        news_count = int(len(news))
+
+        if "Impact" in news.columns:
+            news_score = float(
+                pd.to_numeric(
+                    news["Impact"],
+                    errors="coerce"
+                )
+                .fillna(0)
+                .mean()
+            )
+
+    now = datetime.now(timezone.utc)
+
+    previous = connection.execute(
+        """
+        SELECT
+            timestamp_utc,
+            brent,
+            wti,
+            signal,
+            market_score,
+            confidence,
+            news_score,
+            news_count
+        FROM decision_journal
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    should_insert = previous is None
+
+    if previous is not None:
+        try:
+            previous_time = datetime.fromisoformat(previous[0])
+            elapsed_minutes = (
+                now - previous_time
+            ).total_seconds() / 60
+        except Exception:
+            elapsed_minutes = 999
+
+        previous_brent = _safe_journal_float(previous[1])
+        previous_wti = _safe_journal_float(previous[2])
+
+        brent_changed = (
+            brent_price is not None
+            and previous_brent is not None
+            and abs(brent_price - previous_brent) >= 0.05
+        )
+
+        wti_changed = (
+            wti_price is not None
+            and previous_wti is not None
+            and abs(wti_price - previous_wti) >= 0.05
+        )
+
+        state_changed = any([
+            str(signal) != str(previous[3]),
+            int(score) != int(previous[4]),
+            str(confidence) != str(previous[5]),
+            abs(float(news_score) - float(previous[6] or 0)) >= 1,
+            int(news_count) != int(previous[7] or 0),
+        ])
+
+        should_insert = (
+            elapsed_minutes >= 15
+            or brent_changed
+            or wti_changed
+            or state_changed
+        )
+
+    if should_insert:
+        connection.execute(
+            """
+            INSERT INTO decision_journal (
+                timestamp_utc,
+                brent,
+                wti,
+                signal,
+                market_score,
+                confidence,
+                risk,
+                regime,
+                news_score,
+                news_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(),
+                brent_price,
+                wti_price,
+                str(signal),
+                int(score),
+                str(confidence),
+                str(risk),
+                str(regime),
+                round(news_score, 2),
+                news_count,
+            )
+        )
+
+        connection.commit()
+
+    connection.close()
+
+
+def render_decision_journal():
+    connection = _decision_journal_connection()
+
+    frame = pd.read_sql_query(
+        """
+        SELECT
+            timestamp_utc AS "Timestamp UTC",
+            brent AS "Brent",
+            wti AS "WTI",
+            signal AS "Signal",
+            market_score AS "Score",
+            confidence AS "Confidence",
+            risk AS "Risk",
+            regime AS "Regime",
+            news_score AS "News Score",
+            news_count AS "News Count"
+        FROM decision_journal
+        ORDER BY id DESC
+        LIMIT 50
+        """,
+        connection
+    )
+
+    total_rows = connection.execute(
+        "SELECT COUNT(*) FROM decision_journal"
+    ).fetchone()[0]
+
+    connection.close()
+
+    if frame.empty:
+        st.info("Decision Journal baseline awaiting first record.")
+        return
+
+    frame["Timestamp UTC"] = pd.to_datetime(
+        frame["Timestamp UTC"],
+        errors="coerce",
+        utc=True
+    ).dt.strftime("%d %b %Y · %H:%M UTC")
+
+    j1, j2, j3, j4 = st.columns(4)
+
+    with j1:
+        st.metric(
+            "Recorded Decisions",
+            int(total_rows)
+        )
+
+    with j2:
+        st.metric(
+            "Latest Signal",
+            str(frame.iloc[0]["Signal"])
+        )
+
+    with j3:
+        st.metric(
+            "Latest Score",
+            f"{int(frame.iloc[0]['Score'])}/100"
+        )
+
+    with j4:
+        st.metric(
+            "Latest Confidence",
+            str(frame.iloc[0]["Confidence"])
+        )
+
+    st.dataframe(
+        frame.head(20),
+        width="stretch",
+        hide_index=True
+    )
+
+    csv_data = frame.to_csv(
+        index=False
+    ).encode("utf-8")
+
+    st.download_button(
+        "Download Decision Journal CSV",
+        data=csv_data,
+        file_name="procureye_decision_journal.csv",
+        mime="text/csv",
+        key="download_decision_journal"
+    )
+
+
+
+# PROCUREYE RELEASE 41.4 — ADAPTIVE NEWS WEIGHT
+
+def calculate_adaptive_news_weight(
+    news,
+    risk,
+    regime,
+    confidence
+):
+    result = {
+        "raw_score": 0.0,
+        "effective_score": 0.0,
+        "weight": 0.0,
+        "quality": 0.0,
+        "diversity": 0.0,
+        "dominant_driver": "NONE",
+        "direction": "NEUTRAL",
+        "sample_size": 0,
+        "explanation": "No live news evidence is available."
+    }
+
+    if news is None or news.empty:
+        return result
+
+    if "Impact" not in news.columns:
+        return result
+
+    frame = news.copy()
+
+    frame["Impact"] = pd.to_numeric(
+        frame["Impact"],
+        errors="coerce"
+    ).fillna(0.0)
+
+    if "Confidence" in frame.columns:
+        frame["Confidence"] = pd.to_numeric(
+            frame["Confidence"],
+            errors="coerce"
+        ).fillna(40.0).clip(0, 100)
+    else:
+        frame["Confidence"] = 40.0
+
+    frame = frame[
+        frame["Impact"].notna()
+    ].copy()
+
+    if frame.empty:
+        return result
+
+    confidence_weights = (
+        frame["Confidence"]
+        .clip(lower=10)
+        / 100
+    )
+
+    weighted_denominator = confidence_weights.sum()
+
+    if weighted_denominator > 0:
+        raw_score = float(
+            (
+                frame["Impact"]
+                * confidence_weights
+            ).sum()
+            / weighted_denominator
+        )
+    else:
+        raw_score = float(
+            frame["Impact"].mean()
+        )
+
+    sample_size = int(len(frame))
+
+    average_confidence = float(
+        frame["Confidence"].mean()
+    )
+
+    quality = max(
+        0.25,
+        min(1.0, average_confidence / 100)
+    )
+
+    if "Driver" in frame.columns:
+        valid_drivers = (
+            frame["Driver"]
+            .fillna("UNKNOWN")
+            .astype(str)
+        )
+
+        unique_drivers = int(
+            valid_drivers.nunique()
+        )
+
+        dominant_driver = str(
+            valid_drivers.value_counts().index[0]
+        )
+
+        diversity = min(
+            1.0,
+            unique_drivers / 3
+        )
+    else:
+        unique_drivers = 1
+        dominant_driver = "OIL MARKET"
+        diversity = 0.35
+
+    sample_factor = min(
+        1.0,
+        sample_size / 3
+    )
+
+    regime_text = str(regime).upper()
+    risk_text = str(risk).upper()
+    confidence_text = str(confidence).upper()
+
+    regime_factor = {
+        "BULLISH": 1.00,
+        "BEARISH": 1.00,
+        "TRANSITION": 0.75,
+        "UNKNOWN": 0.55
+    }.get(regime_text, 0.70)
+
+    risk_factor = {
+        "LOW": 1.00,
+        "MEDIUM": 0.90,
+        "HIGH": 0.72
+    }.get(risk_text, 0.80)
+
+    system_confidence_factor = {
+        "HIGH": 1.00,
+        "MEDIUM": 0.85,
+        "LOW": 0.65
+    }.get(confidence_text, 0.70)
+
+    weight = (
+        quality * 0.35
+        + diversity * 0.20
+        + sample_factor * 0.15
+        + regime_factor * 0.10
+        + risk_factor * 0.10
+        + system_confidence_factor * 0.10
+    )
+
+    weight = max(
+        0.20,
+        min(1.0, weight)
+    )
+
+    effective_score = raw_score * weight
+
+    effective_score = max(
+        -100.0,
+        min(100.0, effective_score)
+    )
+
+    if effective_score >= 8:
+        direction = "BULLISH"
+    elif effective_score <= -8:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    explanation = (
+        f"{sample_size} market-moving item(s), "
+        f"{unique_drivers} distinct driver(s), "
+        f"average source confidence {average_confidence:.0f}%. "
+        f"Adaptive news weight {weight:.2f}."
+    )
+
+    result.update({
+        "raw_score": round(raw_score, 2),
+        "effective_score": round(effective_score, 2),
+        "weight": round(weight, 3),
+        "quality": round(quality, 3),
+        "diversity": round(diversity, 3),
+        "dominant_driver": dominant_driver,
+        "direction": direction,
+        "sample_size": sample_size,
+        "explanation": explanation
+    })
+
+    return result
+
+
+def render_adaptive_news_weight(
+    adaptive_news
+):
+    n1, n2, n3, n4 = st.columns(4)
+
+    with n1:
+        st.metric(
+            "Raw News Score",
+            f"{adaptive_news['raw_score']:+.1f}"
+        )
+
+    with n2:
+        st.metric(
+            "Effective News Score",
+            f"{adaptive_news['effective_score']:+.1f}"
+        )
+
+    with n3:
+        st.metric(
+            "Adaptive Weight",
+            f"{adaptive_news['weight']:.2f}"
+        )
+
+    with n4:
+        st.metric(
+            "News Direction",
+            adaptive_news["direction"]
+        )
+
+    st.progress(
+        int(
+            max(
+                0,
+                min(
+                    100,
+                    adaptive_news["weight"] * 100
+                )
+            )
+        )
+    )
+
+    st.caption(
+        f"Dominant driver: "
+        f"{adaptive_news['dominant_driver']} · "
+        f"{adaptive_news['explanation']}"
+    )
+
+
+
+# ======================================================================
+# PROCUREYE RELEASE 41.5
+# CONFIDENCE ENGINE
+# ======================================================================
+
+def calculate_confidence_engine(
+    brent,
+    wti,
+    adaptive_news,
+    similar_cases=None,
+    validation=None
+):
+
+    trend = 50
+    momentum = 50
+    volatility = 50
+    news = 50
+    history = 50
+    validation_score = 50
+
+    try:
+
+        if brent.get("trend") == "BULLISH":
+            trend += 20
+        elif brent.get("trend") == "BEARISH":
+            trend += 20
+
+        if wti.get("trend") == brent.get("trend"):
+            trend += 15
+
+    except:
+        pass
+
+    try:
+
+        bm = abs(float(brent.get("momentum",0)))
+        wm = abs(float(wti.get("momentum",0)))
+
+        momentum += min(25,(bm+wm)/2)
+
+    except:
+        pass
+
+    try:
+
+        vol=max(
+            float(brent.get("volatility",50)),
+            float(wti.get("volatility",50))
+        )
+
+        if vol<20:
+            volatility=95
+        elif vol<30:
+            volatility=85
+        elif vol<40:
+            volatility=70
+        elif vol<55:
+            volatility=55
+        else:
+            volatility=35
+
+    except:
+        pass
+
+    try:
+
+        news=round(
+            adaptive_news["weight"]*100
+        )
+
+    except:
+        pass
+
+    try:
+
+        if similar_cases is not None:
+
+            history=min(
+                100,
+                max(
+                    40,
+                    float(similar_cases)
+                )
+            )
+
+    except:
+        pass
+
+    try:
+
+        if validation is not None:
+
+            validation_score=min(
+                100,
+                max(
+                    40,
+                    float(validation)
+                )
+            )
+
+    except:
+        pass
+
+    final_score=round(
+
+        trend*0.20+
+        momentum*0.15+
+        volatility*0.15+
+        news*0.20+
+        history*0.15+
+        validation_score*0.15
+
+    )
+
+    if final_score>=85:
+        label="VERY HIGH"
+
+    elif final_score>=70:
+        label="HIGH"
+
+    elif final_score>=55:
+        label="MEDIUM"
+
+    elif final_score>=40:
+        label="LOW"
+
+    else:
+        label="VERY LOW"
+
+    return {
+
+        "score":final_score,
+        "label":label,
+
+        "Trend":round(trend),
+        "Momentum":round(momentum),
+        "Volatility":round(volatility),
+        "News":round(news),
+        "History":round(history),
+        "Validation":round(validation_score)
+
+    }
+
+
+def render_confidence_engine(result):
+
+    section(
+        "Confidence Engine",
+        "Explainable confidence decomposition"
+    )
+
+    c1,c2=st.columns([1,2])
+
+    with c1:
+
+        st.metric(
+            "Overall Confidence",
+            f'{result["score"]}%'
+        )
+
+        st.metric(
+            "Level",
+            result["label"]
+        )
+
+    with c2:
+
+        breakdown=pd.DataFrame({
+
+            "Component":[
+                "Trend",
+                "Momentum",
+                "Volatility",
+                "News",
+                "History",
+                "Validation"
+            ],
+
+            "Score":[
+                result["Trend"],
+                result["Momentum"],
+                result["Volatility"],
+                result["News"],
+                result["History"],
+                result["Validation"]
+            ]
+
+        })
+
+        st.dataframe(
+            breakdown,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Score":st.column_config.ProgressColumn(
+                    "Score",
+                    min_value=0,
+                    max_value=100
+                )
+            }
+        )
+
+
+
+# PROCUREYE RELEASE 41.8.1 — DAILY MARKET BRIEF
+
+def build_daily_market_brief(
+    brent,
+    wti,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    adaptive_news,
+    confidence_engine,
+    news
+):
+    def format_price(value):
+        try:
+            return f"${float(value):.2f}"
+        except Exception:
+            return "N/A"
+
+    def format_percent(value):
+        try:
+            return f"{float(value):+.2f}%"
+        except Exception:
+            return "N/A"
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+    )
+
+    news_direction = str(
+        adaptive_news.get("direction", "NEUTRAL")
+    )
+
+    dominant_driver = str(
+        adaptive_news.get("dominant_driver", "NONE")
+    )
+
+    effective_news_score = float(
+        adaptive_news.get("effective_score", 0.0)
+    )
+
+    confidence_score = int(
+        confidence_engine.get("score", 0)
+    )
+
+    confidence_label = str(
+        confidence_engine.get("label", confidence)
+    )
+
+    news_count = 0
+    top_headline = "No dominant live headline."
+
+    if news is not None and not news.empty:
+        news_count = int(len(news))
+
+        if "Title" in news.columns:
+            top_headline = str(
+                news.iloc[0].get(
+                    "Title",
+                    top_headline
+                )
+            )
+
+    structure = (
+        f"Brent is {format_price(brent.get('price'))} "
+        f"({format_percent(brent.get('change'))}) with a "
+        f"{str(brent.get('trend', 'UNKNOWN')).lower()} trend. "
+        f"WTI is {format_price(wti.get('price'))} "
+        f"({format_percent(wti.get('change'))}) with a "
+        f"{str(wti.get('trend', 'UNKNOWN')).lower()} trend."
+    )
+
+    momentum = (
+        f"Brent 10-day momentum is "
+        f"{float(brent.get('momentum', 0)):+.2f}% and "
+        f"WTI momentum is "
+        f"{float(wti.get('momentum', 0)):+.2f}%."
+    )
+
+    news_summary = (
+        f"News pressure is {news_direction.lower()} with "
+        f"effective score {effective_news_score:+.1f}. "
+        f"The dominant driver is {dominant_driver}. "
+        f"{news_count} market-moving item(s) are ranked. "
+        f"Top headline: {top_headline}"
+    )
+
+    decision = (
+        f"PROCUREYE indicates {clean_signal} with "
+        f"Market Score {int(score)}/100, "
+        f"Confidence Engine {confidence_score}% "
+        f"({confidence_label}), risk {risk}, "
+        f"and regime {regime}."
+    )
+
+    if "LONG" in clean_signal.upper():
+        action = (
+            "Upward evidence dominates. Confirm persistence in price, "
+            "momentum and news before taking exposure."
+        )
+    elif "SHORT" in clean_signal.upper():
+        action = (
+            "Downward evidence dominates. Confirm persistence in price, "
+            "momentum and news before taking exposure."
+        )
+    else:
+        action = (
+            "Directional confirmation remains insufficient. "
+            "Maintain WAIT until stronger evidence emerges."
+        )
+
+    return {
+        "structure": structure,
+        "momentum": momentum,
+        "news": news_summary,
+        "decision": decision,
+        "action": action,
+    }
+
+
+def render_daily_market_brief(brief):
+    section(
+        "Daily Market Brief",
+        "One-minute executive market summary"
+    )
+
+    st.markdown(
+        f"""
+**Market structure**  
+{brief["structure"]}
+
+**Momentum**  
+{brief["momentum"]}
+
+**News intelligence**  
+{brief["news"]}
+
+**Decision**  
+{brief["decision"]}
+"""
+    )
+
+    st.info(brief["action"])
+
+
+st.set_page_config(
+    page_title="PROCUREYE | Oil Market Intelligence",
+    page_icon="🛢️",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+
+import streamlit.components.v1 as components
+
+components.html(
+    """
+    <script>
+    setTimeout(function () {
+        window.parent.location.reload();
+    }, 300000);
+    </script>
+    """,
+    height=0,
+    width=0
+)
+
+st.markdown("""
+<style>
+:root {
+    --bg:#071018;
+    --panel:#0e1c27;
+    --panel2:#122633;
+    --border:rgba(140,180,205,.18);
+    --text:#edf5f9;
+    --muted:#91a8b7;
+    --blue:#35a8d4;
+    --green:#29c483;
+    --red:#ff6472;
+    --amber:#f4bd4b;
+}
+html,body,[data-testid="stAppViewContainer"] {
+    background:linear-gradient(145deg,#071018,#0a1721);
+    color:var(--text);
+}
+[data-testid="stHeader"] {
+    background:rgba(7,16,24,.82);
+}
+[data-testid="stAppViewBlockContainer"] {
+    max-width:1600px;
+    padding-top:1.2rem;
+    padding-bottom:4rem;
+}
+.pe-hero {
+    padding:1.45rem 1.6rem;
+    border:1px solid var(--border);
+    border-radius:20px;
+    background:linear-gradient(135deg,#122c3a,#09151e);
+    margin-bottom:1rem;
+    box-shadow:0 18px 45px rgba(0,0,0,.25);
+}
+.pe-top {
+    display:flex;
+    justify-content:space-between;
+    gap:1rem;
+    align-items:center;
+}
+.pe-brand {
+    font-size:2rem;
+    font-weight:800;
+    letter-spacing:.04em;
+}
+.pe-release {
+    border:1px solid rgba(53,168,212,.38);
+    background:rgba(53,168,212,.12);
+    color:#afe7fa;
+    border-radius:999px;
+    padding:.4rem .75rem;
+    font-size:.75rem;
+    font-weight:700;
+}
+.pe-title {
+    margin-top:.8rem;
+    font-size:1.35rem;
+    font-weight:700;
+}
+.pe-copy {
+    margin-top:.35rem;
+    color:var(--muted);
+    max-width:900px;
+}
+.pe-badges {
+    margin-top:1rem;
+    display:flex;
+    flex-wrap:wrap;
+    gap:.55rem;
+}
+.pe-badge {
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:.38rem .65rem;
+    color:#bdd0db;
+    font-size:.72rem;
+    font-weight:650;
+}
+.pe-section {
+    margin-top:1.2rem;
+    margin-bottom:.55rem;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+}
+.pe-section strong {
+    font-size:.9rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+}
+.pe-section span {
+    color:var(--muted);
+    font-size:.78rem;
+}
+[data-testid="stMetric"] {
+    min-height:112px;
+    padding:1rem;
+    border:1px solid var(--border);
+    border-radius:15px;
+    background:linear-gradient(145deg,var(--panel2),var(--panel));
+}
+[data-testid="stMetricLabel"] {
+    color:var(--muted);
+    text-transform:uppercase;
+    letter-spacing:.05em;
+    font-size:.72rem;
+}
+[data-testid="stMetricValue"] {
+    color:var(--text);
+    font-weight:750;
+}
+[data-testid="stAlert"] {
+    border-radius:13px;
+}
+[data-testid="stDataFrame"] {
+    border:1px solid var(--border);
+    border-radius:14px;
+    overflow:hidden;
+}
+#MainMenu,footer {
+    visibility:hidden;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<section class="pe-hero">
+  <div class="pe-top">
+    <div class="pe-brand">PROCUREYE</div>
+    <div class="pe-release">Release 42.0 · Architecture Freeze
+  </div>
+  <div class="pe-title">Crude Oil Market Intelligence Platform</div>
+  <div class="pe-copy">
+    Decision-support intelligence for Brent and WTI using market structure,
+    momentum, volatility, news, historical memory and explainable reasoning.
+  </div>
+  <div class="pe-badges">
+    <span class="pe-badge">CONTROLLED LEARNING AGENT</span>
+    <span class="pe-badge">ADVANCED MARKET INTELLIGENCE</span>
+    <span class="pe-badge">DECISION SUPPORT ONLY</span>
+    <span class="pe-badge">HUMAN OVERSIGHT REQUIRED</span>
+  </div>
+</section>
+""", unsafe_allow_html=True)
+
+def section(title, subtitle):
+    st.markdown(
+        f'<div class="pe-section"><strong>{title}</strong>'
+        f'<span>{subtitle}</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+
+def load_price_series(csv_name, ticker):
+    from urllib.parse import quote
+
+    safe_name = (
+        str(ticker)
+        .replace("=", "_")
+        .replace("^", "_")
+        .replace("/", "_")
+    )
+
+    fallback_file = Path("/tmp") / f"procureye_{safe_name}_fallback.csv"
+
+    def normalize(frame, date_col=None, close_col=None, source_name="UNKNOWN"):
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=["Date", "Close"])
+
+        data = frame.copy()
+
+        if date_col is None:
+            date_col = next(
+                (
+                    column for column in data.columns
+                    if str(column).lower()
+                    in {"date", "datetime", "timestamp"}
+                ),
+                data.columns[0]
+            )
+
+        if close_col is None:
+            close_col = next(
+                (
+                    column for column in data.columns
+                    if str(column).lower()
+                    in {"close", "adj close", "price"}
+                ),
+                None
+            )
+
+        if close_col is None:
+            return pd.DataFrame(columns=["Date", "Close"])
+
+        data = data[[date_col, close_col]].copy()
+        data.columns = ["Date", "Close"]
+
+        data["Date"] = pd.to_datetime(
+            data["Date"],
+            errors="coerce",
+            utc=True
+        ).dt.tz_localize(None)
+
+        data["Close"] = pd.to_numeric(
+            data["Close"],
+            errors="coerce"
+        )
+
+        data = (
+            data.dropna(subset=["Date", "Close"])
+            .drop_duplicates("Date")
+            .sort_values("Date")
+            .reset_index(drop=True)
+        )
+
+        if not data.empty:
+            data.attrs["source"] = source_name
+            data.attrs["status"] = "LIVE"
+
+        return data
+
+    local_paths = [
+        Path("/content") / csv_name,
+        Path.cwd() / csv_name,
+        Path.cwd() / "data" / csv_name
+    ]
+
+    for path in local_paths:
+        if not path.exists():
+            continue
+
+        try:
+            data = normalize(
+                pd.read_csv(path),
+                source_name=f"LOCAL:{path.name}"
+            )
+
+            if not data.empty:
+                data.to_csv(fallback_file, index=False)
+                return data
+        except Exception:
+            pass
+
+    symbol = quote(str(ticker), safe="")
+
+    yahoo_urls = [
+        (
+            "https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{symbol}?range=6mo&interval=1d"
+        ),
+        (
+            "https://query2.finance.yahoo.com/v8/finance/chart/"
+            f"{symbol}?range=6mo&interval=1d"
+        )
+    ]
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+        ),
+        "Accept": "application/json"
+    }
+
+    for index, url in enumerate(yahoo_urls, start=1):
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=20
+            )
+            response.raise_for_status()
+
+            payload = response.json()
+            results = payload.get("chart", {}).get("result")
+
+            if not results:
+                continue
+
+            item = results[0]
+            timestamps = item.get("timestamp", [])
+            closes = (
+                item.get("indicators", {})
+                .get("quote", [{}])[0]
+                .get("close", [])
+            )
+
+            length = min(len(timestamps), len(closes))
+
+            if length == 0:
+                continue
+
+            raw = pd.DataFrame({
+                "Date": pd.to_datetime(
+                    timestamps[:length],
+                    unit="s",
+                    utc=True,
+                    errors="coerce"
+                ),
+                "Close": closes[:length]
+            })
+
+            data = normalize(
+                raw,
+                date_col="Date",
+                close_col="Close",
+                source_name=f"YAHOO_QUERY_{index}"
+            )
+
+            if not data.empty:
+                data.to_csv(fallback_file, index=False)
+                return data
+
+        except Exception:
+            continue
+
+    try:
+        import yfinance as yf
+
+        raw = yf.download(
+            ticker,
+            period="6mo",
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+            threads=False,
+            timeout=20
+        )
+
+        if raw is not None and not raw.empty:
+            if isinstance(raw.columns, pd.MultiIndex):
+                close = raw["Close"].iloc[:, 0]
+            else:
+                close = raw["Close"]
+
+            frame = pd.DataFrame({
+                "Date": close.index,
+                "Close": close.to_numpy()
+            })
+
+            data = normalize(
+                frame,
+                date_col="Date",
+                close_col="Close",
+                source_name="YFINANCE"
+            )
+
+            if not data.empty:
+                data.to_csv(fallback_file, index=False)
+                return data
+
+    except Exception:
+        pass
+
+    if fallback_file.exists():
+        try:
+            data = normalize(
+                pd.read_csv(fallback_file),
+                source_name="LAST_VALID_SNAPSHOT"
+            )
+
+            if not data.empty:
+                data.attrs["status"] = "FALLBACK"
+                return data
+        except Exception:
+            pass
+
+    unavailable = pd.DataFrame(columns=["Date", "Close"])
+    unavailable.attrs["source"] = "NONE"
+    unavailable.attrs["status"] = "UNAVAILABLE"
+    return unavailable
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_market_data():
+    return (
+        load_price_series("brent.csv", "BZ=F"),
+        load_price_series("wti.csv", "CL=F")
+    )
+
+def metrics(df):
+    if df.empty:
+        return {
+            "price": None,
+            "change": None,
+            "trend": "UNKNOWN",
+            "momentum": 0.0,
+            "volatility": 0.0
+        }
+
+    close = df["Close"].dropna()
+    price = float(close.iloc[-1])
+
+    change = 0.0
+    if len(close) > 1 and close.iloc[-2] != 0:
+        change = float((close.iloc[-1] / close.iloc[-2] - 1) * 100)
+
+    ma20 = close.rolling(20).mean().iloc[-1] if len(close) >= 20 else close.mean()
+    trend = "BULLISH" if price > ma20 else "BEARISH"
+
+    momentum = 0.0
+    if len(close) >= 11 and close.iloc[-11] != 0:
+        momentum = float((close.iloc[-1] / close.iloc[-11] - 1) * 100)
+
+    returns = close.pct_change().dropna()
+    volatility = float(returns.tail(20).std() * (252 ** 0.5) * 100) if len(returns) else 0.0
+
+    return {
+        "price": price,
+        "change": change,
+        "trend": trend,
+        "momentum": momentum,
+        "volatility": volatility
+    }
+
+def fallback_signal(brent, wti, news_score=0):
+    score = 50
+
+    for item in (brent, wti):
+        if item["trend"] == "BULLISH":
+            score += 8
+        elif item["trend"] == "BEARISH":
+            score -= 8
+
+        score += max(-7, min(7, item["momentum"]))
+
+    news_adjustment = max(
+        -15,
+        min(15, float(news_score) * 0.15)
+    )
+
+    score += news_adjustment
+    score = int(max(0, min(100, round(score))))
+
+    if score >= 62:
+        signal = "🟢 LONG"
+    elif score <= 38:
+        signal = "🔴 SHORT"
+    else:
+        signal = "🟡 WAIT"
+
+    confidence = "HIGH" if score >= 75 or score <= 25 else "MEDIUM" if score >= 62 or score <= 38 else "LOW"
+
+    return signal, score, confidence
+
+def existing_engine_signal(brent_df, wti_df, fallback, news_score=0):
+    try:
+        from procureye_signal_engine_v22 import calculate_signal
+
+        signature = inspect.signature(calculate_signal)
+        kwargs = {}
+
+        values = {
+            "brent": brent_df["Close"],
+            "brent_close": brent_df["Close"],
+            "wti": wti_df["Close"],
+            "wti_close": wti_df["Close"],
+            "news_score": news_score
+        }
+
+        for name in signature.parameters:
+            if name in values:
+                kwargs[name] = values[name]
+
+        result = calculate_signal(**kwargs)
+
+        if isinstance(result, dict):
+            return (
+                result.get("signal", fallback[0]),
+                int(result.get("score", fallback[1])),
+                result.get("confidence", fallback[2]),
+                result
+            )
+
+    except Exception:
+        pass
+
+    return fallback[0], fallback[1], fallback[2], {}
+
+def chart(df, title):
+    if df.empty:
+        st.warning(f"{title}: dati non disponibili.")
+        return
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=df["Date"],
+        y=df["Close"],
+        mode="lines",
+        name=title,
+        line=dict(width=2)
+    ))
+
+    fig.update_layout(
+        title=title,
+        height=390,
+        margin=dict(l=15, r=15, t=50, b=15),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#dceaf1"),
+        hovermode="x unified",
+        xaxis=dict(
+            rangeslider=dict(visible=True),
+            gridcolor="rgba(140,180,205,.10)"
+        ),
+        yaxis=dict(
+            title="USD",
+            gridcolor="rgba(140,180,205,.10)"
+        )
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+def load_news():
+    candidates = [
+        Path("/content/procureye_news_memory.csv"),
+        Path("/content/procureye_daily_briefing.csv"),
+        Path("/content/procureye_news_discovery_memory.csv")
+    ]
+
+    for path in candidates:
+        if not path.exists():
+            continue
+
+        try:
+            df = pd.read_csv(path)
+
+            title_col = next(
+                (c for c in df.columns if c.lower() in {"title","headline","news_title"}),
+                None
+            )
+
+            source_col = next(
+                (c for c in df.columns if c.lower() in {"source","publisher"}),
+                None
+            )
+
+            impact_col = next(
+                (c for c in df.columns if c.lower() in {"impact","impact_score","score"}),
+                None
+            )
+
+            if title_col:
+                result = pd.DataFrame()
+                result["Title"] = df[title_col].astype(str)
+                result["Source"] = df[source_col].astype(str) if source_col else "PROCUREYE"
+                result["Impact"] = pd.to_numeric(df[impact_col], errors="coerce").fillna(0) if impact_col else 0
+                result["Bias"] = result["Impact"].apply(
+                    lambda x: "BULLISH" if x > 0 else "BEARISH" if x < 0 else "NEUTRAL"
+                )
+
+                return result.sort_values(
+                    "Impact",
+                    key=lambda x: x.abs(),
+                    ascending=False
+                ).head(3)
+
+        except Exception:
+            pass
+
+    return pd.DataFrame([
+        {
+            "Title": "Oil market news feed awaiting live source refresh",
+            "Source": "PROCUREYE",
+            "Impact": 0,
+            "Bias": "NEUTRAL"
+        }
+    ])
+
+# ==============================================================
+# PROCUREYE RELEASE 41.7 — CONTROLLED EXECUTION ARCHITECTURE
+# ==============================================================
+
+def run_procureye_dashboard():
+    """Execute the complete dashboard in one controlled scope."""
+
+    brent_df, wti_df = get_market_data()
+    brent = metrics(brent_df)
+    wti = metrics(wti_df)
+
+    signal_news = get_market_movers(limit=3)
+
+    if signal_news is not None and not signal_news.empty:
+        news_score = float(
+            pd.to_numeric(
+                signal_news["Impact"],
+                errors="coerce"
+            )
+            .fillna(0)
+            .clip(-100, 100)
+            .mean()
+        )
+    else:
+        news_score = 0.0
+
+    spread = None
+
+    if (
+        brent["price"] is not None
+        and wti["price"] is not None
+    ):
+        spread = brent["price"] - wti["price"]
+
+    market_volatility = max(
+        float(brent.get("volatility", 0) or 0),
+        float(wti.get("volatility", 0) or 0)
+    )
+
+    risk = (
+        "HIGH"
+        if market_volatility >= 45
+        else "MEDIUM"
+        if market_volatility >= 25
+        else "LOW"
+    )
+
+    provisional_regime = "TRANSITION"
+
+    provisional_fallback = fallback_signal(
+        brent,
+        wti,
+        news_score=0.0
+    )
+
+    provisional_confidence = provisional_fallback[2]
+
+    adaptive_news = calculate_adaptive_news_weight(
+        news=signal_news,
+        risk=risk,
+        regime=provisional_regime,
+        confidence=provisional_confidence
+    )
+
+    adaptive_news_score = float(
+        adaptive_news.get("effective_score", 0.0)
+    )
+
+    fallback = fallback_signal(
+        brent,
+        wti,
+        news_score=adaptive_news_score
+    )
+
+    signal, score, confidence, engine_result = existing_engine_signal(
+        brent_df,
+        wti_df,
+        fallback,
+        news_score=adaptive_news_score
+    )
+
+    regime = (
+        engine_result
+        .get("components", {})
+        .get("regime", provisional_regime)
+        if isinstance(engine_result, dict)
+        else provisional_regime
+    )
+
+    confidence_engine = calculate_confidence_engine(
+        brent=brent,
+        wti=wti,
+        adaptive_news=adaptive_news
+    )
+
+    section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+    render_system_health(brent_df, wti_df, signal_news)
+
+    render_market_delta(
+        brent,
+        wti,
+        signal,
+        score,
+        confidence
+    )
+
+
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+
+    with c1:
+        st.metric(
+            "Brent",
+            f"${brent['price']:.2f}" if brent["price"] is not None else "N/A",
+            f"{brent['change']:+.2f}%" if brent["change"] is not None else None
+        )
+
+    with c2:
+        st.metric(
+            "WTI",
+            f"${wti['price']:.2f}" if wti["price"] is not None else "N/A",
+            f"{wti['change']:+.2f}%" if wti["change"] is not None else None
+        )
+
+    with c3:
+        st.metric("Signal", signal)
+
+    with c4:
+        st.metric("Market Score", f"{score}/100")
+
+    with c5:
+        st.metric("Confidence", confidence)
+
+    with c6:
+        st.metric("Risk", risk)
+
+    section("Market Intelligence", "Brent and WTI interactive history")
+
+    left, right = st.columns(2, gap="large")
+
+    with left:
+        render_professional_chart(brent_df, "Brent Crude Oil", "BRENT")
+
+    with right:
+        render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
+
+
+    section("Why This Signal?", "Automatic explainable decision summary")
+
+    _why_news = signal_news.copy()
+
+    why = build_why_signal(
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti,
+        news=_why_news
+    )
+
+    st.subheader(why["title"])
+
+    for reason in why["reasons"]:
+        st.write(f"✓ {reason}")
+
+    st.info(why["action"])
+
+    w1, w2, w3 = st.columns(3)
+
+    with w1:
+        st.metric("Market Score", f"{why['score']}/100")
+
+    with w2:
+        st.metric("Confidence", why["confidence"])
+
+    with w3:
+        st.metric("Market Regime", why["regime"])
+
+
+    section(
+        "Top Market-Moving News",
+        "Three highest-impact live oil-market items"
+    )
+
+    refresh_news = st.button(
+        "Refresh market data and news",
+        key="refresh_market_news"
+    )
+
+    if refresh_news:
+        st.cache_data.clear()
+        st.rerun()
+
+    news = get_market_movers(limit=3)
+
+    for index, row in news.iterrows():
+        icon = (
+            "🟢" if row["Bias"] == "BULLISH"
+            else "🔴" if row["Bias"] == "BEARISH"
+            else "🟡"
+        )
+
+        with st.container(border=True):
+            st.markdown(f"### {index + 1}. {icon} {row['Title']}")
+
+            n1, n2, n3 = st.columns([2, 1, 1])
+
+            with n1:
+                st.caption(
+                    f"{row['Source']} · {row['Published']}"
+                )
+
+            with n2:
+                st.metric(
+                    "Expected impact",
+                    row["Bias"],
+                    f"{row['Impact']:+.1f}"
+                )
+
+            with n3:
+                st.metric(
+                    "Confidence",
+                    f"{int(row['Confidence'])}%"
+                )
+
+            if row.get("URL"):
+                st.link_button(
+                    "Read full article →",
+                    row["URL"],
+                    use_container_width=False
+                )
+
+
+    section("Market Drivers", "Current directional evidence")
+
+    drivers = build_market_drivers(
+        brent=brent,
+        wti=wti,
+        news=news,
+        risk=risk
+    )
+
+    st.dataframe(
+        drivers,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Strength": st.column_config.ProgressColumn(
+                "Strength",
+                min_value=0,
+                max_value=100,
+                format="%d"
+            )
+        }
+    )
+
+
+
+    record_decision_journal(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        news=news
+    )
+
+
+    section(
+        "Adaptive News Weight",
+        "Controlled contribution of live news to the Market Score"
+    )
+
+    render_adaptive_news_weight(
+        adaptive_news
+    )
+
+
+    section(
+        "Decision Journal",
+        "Recorded market decisions and changes"
+    )
+
+    render_decision_journal()
+
+
+
+
+    render_confidence_engine(
+        confidence_engine
+    )
+
+    daily_market_brief = build_daily_market_brief(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        adaptive_news=adaptive_news,
+        confidence_engine=confidence_engine,
+        news=news,
+    )
+
+    render_daily_market_brief(
+        daily_market_brief
+    )
+
+    section("System State", "Release 39 operating status")
+
+    s1, s2, s3, s4 = st.columns(4)
+
+    with s1:
+        st.metric("Agent State", "CONTROLLED")
+
+    with s2:
+        st.metric("Learning State", "ACTIVE")
+
+    with s3:
+        st.metric("Decision Mode", "SUPPORT ONLY")
+
+    with s4:
+        st.metric("Human Oversight", "REQUIRED")
+
+    st.caption(
+        "PROCUREYE does not execute trades or orders. "
+        "All outputs are decision-support information only."
+    )
+
+
+if __name__ == "__main__":
+    run_procureye_dashboard()
