@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-from drivers.driver_intelligence import analyze_driver_intelligence
-# -*- coding: utf-8 -*-
 # PROCUREYE RELEASE 40.3 — COMPACT DELTA MONITOR
 
 # ===== EMBEDDED MODULE: professional_chart.py =====
@@ -2971,7 +2969,6 @@ def run_procureye_dashboard():
     news = get_market_movers(limit=3)
 
 
-    driver_intelligence = analyze_driver_intelligence(news)
     for index, row in news.iterrows():
         icon = (
             "🟢" if row["Bias"] == "BULLISH"
@@ -3035,9 +3032,6 @@ def run_procureye_dashboard():
 
 
 
-    render_driver_intelligence_panel(
-        driver_intelligence
-    )
 
     record_decision_journal(
         brent=brent,
