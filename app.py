@@ -2621,6 +2621,279 @@ def render_market_movers_ranking(ranking):
 # END PROCUREYE RELEASE 42.2 DEV
 
 
+
+# PROCUREYE RELEASE 42.3 DEV — DRIVER CORRELATION ENGINE
+
+DRIVER_FAMILIES = {
+    "SUPPLY TIGHTENING": {
+        "OPEC / PRODUCTION",
+        "SUPPLY DISRUPTION",
+        "GEOPOLITICS",
+    },
+    "DEMAND SUPPORT": {
+        "GLOBAL DEMAND",
+        "DOLLAR / FED",
+    },
+    "INVENTORY PRESSURE": {
+        "US INVENTORIES",
+    },
+}
+
+
+def calculate_driver_correlation(driver_report):
+    empty = {
+        "state": "INSUFFICIENT DATA",
+        "direction": "NEUTRAL",
+        "score": 0,
+        "confidence": 0,
+        "alignment": 0,
+        "contradictions": 0,
+        "active_drivers": 0,
+        "summary": "Insufficient structured driver evidence.",
+        "details": pd.DataFrame(
+            columns=[
+                "Driver",
+                "Direction",
+                "Strength",
+                "Confidence",
+                "Contribution",
+            ]
+        ),
+    }
+
+    if not isinstance(driver_report, dict):
+        return empty
+
+    drivers = driver_report.get("drivers")
+
+    if not isinstance(drivers, pd.DataFrame) or drivers.empty:
+        return empty
+
+    frame = drivers.copy()
+
+    required = {
+        "Driver": "OIL MARKET",
+        "Direction": "NEUTRAL",
+        "Strength": 0,
+        "Confidence": 0,
+    }
+
+    for column, default in required.items():
+        if column not in frame.columns:
+            frame[column] = default
+
+    frame["Strength"] = pd.to_numeric(
+        frame["Strength"],
+        errors="coerce"
+    ).fillna(0).clip(0, 100)
+
+    frame["Confidence"] = pd.to_numeric(
+        frame["Confidence"],
+        errors="coerce"
+    ).fillna(0).clip(0, 100)
+
+    frame["Direction"] = (
+        frame["Direction"]
+        .fillna("NEUTRAL")
+        .astype(str)
+        .str.upper()
+    )
+
+    direction_value = {
+        "BULLISH": 1,
+        "BEARISH": -1,
+        "NEUTRAL": 0,
+    }
+
+    frame["Direction Value"] = frame["Direction"].map(
+        direction_value
+    ).fillna(0)
+
+    frame["Contribution"] = (
+        frame["Direction Value"]
+        * frame["Strength"]
+        * frame["Confidence"]
+        / 100
+    ).round(1)
+
+    active = frame[
+        frame["Direction"].isin(["BULLISH", "BEARISH"])
+    ].copy()
+
+    if active.empty:
+        return empty
+
+    bullish = int((active["Direction"] == "BULLISH").sum())
+    bearish = int((active["Direction"] == "BEARISH").sum())
+
+    net_score = float(active["Contribution"].sum())
+    total_absolute = float(active["Contribution"].abs().sum())
+
+    alignment = (
+        abs(net_score) / total_absolute * 100
+        if total_absolute > 0
+        else 0
+    )
+
+    contradictions = min(bullish, bearish)
+
+    average_confidence = float(
+        active["Confidence"].mean()
+    )
+
+    evidence_factor = min(
+        1.0,
+        len(active) / 3
+    )
+
+    confidence = int(min(
+        98,
+        average_confidence * 0.60
+        + alignment * 0.25
+        + evidence_factor * 15
+    ))
+
+    normalized_score = int(max(
+        -100,
+        min(100, net_score)
+    ))
+
+    if normalized_score >= 15:
+        direction = "BULLISH"
+    elif normalized_score <= -15:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    if alignment >= 75 and len(active) >= 2:
+        state = "STRONG ALIGNMENT"
+    elif alignment >= 50:
+        state = "MODERATE ALIGNMENT"
+    elif contradictions > 0:
+        state = "CONFLICTING DRIVERS"
+    else:
+        state = "WEAK ALIGNMENT"
+
+    top = (
+        active.assign(
+            AbsoluteContribution=active["Contribution"].abs()
+        )
+        .sort_values(
+            "AbsoluteContribution",
+            ascending=False
+        )
+        .head(3)
+    )
+
+    driver_names = ", ".join(
+        top["Driver"].astype(str).tolist()
+    )
+
+    summary = (
+        f"{state}: {direction} pressure with "
+        f"{alignment:.0f}% driver alignment. "
+        f"Main contributors: {driver_names}. "
+        f"{contradictions} opposing driver(s) detected."
+    )
+
+    details = frame[
+        [
+            "Driver",
+            "Direction",
+            "Strength",
+            "Confidence",
+            "Contribution",
+        ]
+    ].sort_values(
+        "Contribution",
+        key=lambda values: values.abs(),
+        ascending=False
+    ).reset_index(drop=True)
+
+    return {
+        "state": state,
+        "direction": direction,
+        "score": normalized_score,
+        "confidence": confidence,
+        "alignment": int(round(alignment)),
+        "contradictions": contradictions,
+        "active_drivers": int(len(active)),
+        "summary": summary,
+        "details": details,
+    }
+
+
+def render_driver_correlation(report):
+    section(
+        "Driver Correlation Engine",
+        "Alignment and conflict among current market drivers"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Correlation State",
+            report.get("state", "UNKNOWN")
+        )
+
+    with c2:
+        st.metric(
+            "Combined Direction",
+            report.get("direction", "NEUTRAL")
+        )
+
+    with c3:
+        st.metric(
+            "Driver Alignment",
+            f"{int(report.get('alignment', 0))}%"
+        )
+
+    with c4:
+        st.metric(
+            "Correlation Confidence",
+            f"{int(report.get('confidence', 0))}%"
+        )
+
+    details = report.get("details")
+
+    if isinstance(details, pd.DataFrame) and not details.empty:
+        st.dataframe(
+            details,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Strength": st.column_config.ProgressColumn(
+                    "Strength",
+                    min_value=0,
+                    max_value=100,
+                    format="%d"
+                ),
+                "Confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    min_value=0,
+                    max_value=100,
+                    format="%d%%"
+                ),
+                "Contribution": st.column_config.NumberColumn(
+                    "Contribution",
+                    format="%+.1f"
+                ),
+            }
+        )
+    else:
+        st.info(
+            "Driver Correlation awaits sufficient evidence."
+        )
+
+    if report.get("state") == "CONFLICTING DRIVERS":
+        st.warning(report.get("summary", ""))
+    else:
+        st.info(report.get("summary", ""))
+
+# END PROCUREYE RELEASE 42.3 DEV
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -2772,7 +3045,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 42.2 · Market Movers Ranking Pro
+    <div class="pe-release">Release 42.3 · Driver Correlation Engine
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -3487,8 +3760,16 @@ def run_procureye_dashboard():
 
     driver_intelligence = analyze_driver_intelligence(news)
 
+
+    driver_correlation = calculate_driver_correlation(
+        driver_intelligence
+    )
     render_driver_intelligence_panel(
         driver_intelligence
+    )
+
+    render_driver_correlation(
+        driver_correlation
     )
 
     record_decision_journal(
