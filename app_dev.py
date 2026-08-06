@@ -3255,6 +3255,315 @@ def render_historical_driver_memory(memory):
 # END PROCUREYE RELEASE 42.4 DEV
 
 
+
+# PROCUREYE RELEASE 42.5 DEV — CONFIDENCE INTELLIGENCE V2
+
+def calculate_confidence_intelligence_v2(
+    base_confidence,
+    driver_report,
+    correlation_report,
+    historical_memory,
+    brent,
+    wti,
+    risk
+):
+    def numeric(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    if isinstance(base_confidence, dict):
+        base_score = numeric(
+            base_confidence.get("score", 0)
+        )
+    else:
+        base_score = numeric(base_confidence)
+
+    driver_score = numeric(
+        driver_report.get("confidence", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    driver_strength = numeric(
+        driver_report.get("strength", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    correlation_confidence = numeric(
+        correlation_report.get("confidence", 0)
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    alignment = numeric(
+        correlation_report.get("alignment", 0)
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    contradictions = int(
+        correlation_report.get("contradictions", 0)
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    observations = int(
+        historical_memory.get("total", 0)
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    historical_alignment = numeric(
+        historical_memory.get(
+            "average_alignment",
+            0
+        )
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    brent_trend = str(
+        brent.get("trend", "UNKNOWN")
+        if isinstance(brent, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    wti_trend = str(
+        wti.get("trend", "UNKNOWN")
+        if isinstance(wti, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    trend_agreement = (
+        100
+        if brent_trend == wti_trend
+        and brent_trend not in {
+            "UNKNOWN",
+            "NEUTRAL",
+        }
+        else 55
+        if brent_trend == wti_trend
+        else 25
+    )
+
+    risk_text = str(risk).upper()
+
+    risk_penalty = {
+        "LOW": 0,
+        "MEDIUM": 5,
+        "HIGH": 12,
+    }.get(risk_text, 7)
+
+    contradiction_penalty = min(
+        24,
+        contradictions * 12
+    )
+
+    historical_reliability = min(
+        100,
+        observations * 8
+    )
+
+    components = {
+        "Base Confidence": round(base_score, 1),
+        "Driver Confidence": round(driver_score, 1),
+        "Driver Strength": round(driver_strength, 1),
+        "Correlation Confidence": round(
+            correlation_confidence,
+            1
+        ),
+        "Driver Alignment": round(alignment, 1),
+        "Trend Agreement": round(
+            trend_agreement,
+            1
+        ),
+        "Historical Reliability": round(
+            historical_reliability,
+            1
+        ),
+        "Historical Alignment": round(
+            historical_alignment,
+            1
+        ),
+    }
+
+    weighted_score = (
+        base_score * 0.24
+        + driver_score * 0.15
+        + driver_strength * 0.10
+        + correlation_confidence * 0.15
+        + alignment * 0.14
+        + trend_agreement * 0.10
+        + historical_reliability * 0.07
+        + historical_alignment * 0.05
+        - risk_penalty
+        - contradiction_penalty
+    )
+
+    score = int(
+        max(
+            0,
+            min(100, round(weighted_score))
+        )
+    )
+
+    if score >= 80:
+        level = "VERY HIGH"
+    elif score >= 65:
+        level = "HIGH"
+    elif score >= 50:
+        level = "MEDIUM"
+    elif score >= 35:
+        level = "LOW"
+    else:
+        level = "VERY LOW"
+
+    strongest_component = max(
+        components,
+        key=components.get
+    )
+
+    weakest_component = min(
+        components,
+        key=components.get
+    )
+
+    penalties = []
+
+    if risk_penalty:
+        penalties.append(
+            f"market risk -{risk_penalty}"
+        )
+
+    if contradiction_penalty:
+        penalties.append(
+            f"driver contradiction -{contradiction_penalty}"
+        )
+
+    penalty_text = (
+        ", ".join(penalties)
+        if penalties
+        else "no material penalties"
+    )
+
+    explanation = (
+        f"Confidence {score}% ({level}). "
+        f"Strongest component: {strongest_component} "
+        f"at {components[strongest_component]:.0f}%. "
+        f"Weakest component: {weakest_component} "
+        f"at {components[weakest_component]:.0f}%. "
+        f"Adjustments: {penalty_text}."
+    )
+
+    breakdown = pd.DataFrame([
+        {
+            "Component": component,
+            "Score": value,
+        }
+        for component, value
+        in components.items()
+    ])
+
+    return {
+        "score": score,
+        "level": level,
+        "risk_penalty": risk_penalty,
+        "contradiction_penalty":
+            contradiction_penalty,
+        "observations": observations,
+        "strongest_component":
+            strongest_component,
+        "weakest_component":
+            weakest_component,
+        "explanation": explanation,
+        "breakdown": breakdown,
+    }
+
+
+def render_confidence_intelligence_v2(report):
+    section(
+        "Confidence Intelligence v2",
+        "Multi-factor reliability of the current market decision"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Confidence v2",
+            f"{int(report.get('score', 0))}%"
+        )
+
+    with c2:
+        st.metric(
+            "Confidence Level",
+            report.get("level", "UNKNOWN")
+        )
+
+    with c3:
+        st.metric(
+            "Historical Samples",
+            int(report.get("observations", 0))
+        )
+
+    with c4:
+        total_penalty = (
+            int(report.get("risk_penalty", 0))
+            + int(
+                report.get(
+                    "contradiction_penalty",
+                    0
+                )
+            )
+        )
+
+        st.metric(
+            "Total Penalty",
+            f"-{total_penalty}"
+        )
+
+    breakdown = report.get("breakdown")
+
+    if (
+        isinstance(breakdown, pd.DataFrame)
+        and not breakdown.empty
+    ):
+        st.dataframe(
+            breakdown,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Score":
+                    st.column_config.ProgressColumn(
+                        "Score",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f"
+                    )
+            }
+        )
+
+    st.info(
+        report.get(
+            "explanation",
+            "Confidence explanation unavailable."
+        )
+    )
+
+    st.caption(
+        "Confidence v2 combines market confidence, "
+        "driver evidence, correlation, trend agreement, "
+        "historical memory, risk and contradictions."
+    )
+
+# END PROCUREYE RELEASE 42.5 DEV
+
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -3406,7 +3715,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 42.4 DEV · Historical Driver Memory
+    <div class="pe-release">Release 42.5 DEV · Confidence Intelligence v2
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -4146,6 +4455,20 @@ def run_procureye_dashboard():
 
     render_historical_driver_memory(
         historical_driver_memory
+    )
+
+    confidence_intelligence_v2 = calculate_confidence_intelligence_v2(
+        base_confidence=confidence_engine,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        historical_memory=historical_driver_memory,
+        brent=brent,
+        wti=wti,
+        risk=risk
+    )
+
+    render_confidence_intelligence_v2(
+        confidence_intelligence_v2
     )
 
     record_decision_journal(
