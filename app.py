@@ -1,10 +1,10 @@
+# -*- coding: utf-8 -*-
 # PROCUREYE RELEASE 40.3 — COMPACT DELTA MONITOR
 
 # ===== EMBEDDED MODULE: professional_chart.py =====
 
 import pandas as pd
 import plotly.graph_objects as go
-from drivers.driver_intelligence import analyze_driver_intelligence, render_driver_intelligence
 import streamlit as st
 
 
@@ -2962,14 +2962,6 @@ def run_procureye_dashboard():
     )
 
 
-
-    driver_intelligence = analyze_driver_intelligence(
-        news=news
-    )
-
-    render_driver_intelligence(
-        driver_intelligence
-    )
 
     record_decision_journal(
         brent=brent,
