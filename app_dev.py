@@ -772,7 +772,13 @@ def get_market_movers(limit=3):
         errors="ignore"
     )
 
-    return result.reset_index(drop=True)
+    result = result.reset_index(drop=True)
+    result.attrs["status"] = "LIVE"
+    result.attrs["retrieved_at"] = (
+        datetime.now(timezone.utc).isoformat()
+    )
+
+    return result
 
 
 # ===== EMBEDDED MODULE: market_drivers.py =====
@@ -1076,64 +1082,119 @@ import streamlit as st
 def render_system_health(brent_df, wti_df, news_df):
     now = datetime.now(timezone.utc)
 
-    def latest_market_time(df):
-        if df is None or df.empty or "Date" not in df.columns:
+    def frame_status(df, is_news=False):
+        if df is None or df.empty:
+            return "UNAVAILABLE"
+
+        if is_news:
+            fallback_news = (
+                len(df) == 1
+                and str(
+                    df.iloc[0].get("Source", "")
+                ).upper() == "PROCUREYE"
+            )
+
+            if fallback_news:
+                return "FALLBACK"
+
+        status = str(
+            df.attrs.get("status", "LIVE")
+        ).upper()
+
+        if status in {
+            "LIVE",
+            "ONLINE",
+            "YFINANCE",
+        }:
+            return "LIVE"
+
+        if status in {
+            "FALLBACK",
+            "LOCAL",
+            "LAST_VALID_SNAPSHOT",
+        }:
+            return "FALLBACK"
+
+        if status in {
+            "UNAVAILABLE",
+            "NONE",
+        }:
+            return "UNAVAILABLE"
+
+        return "LIVE"
+
+    def retrieval_time(df):
+        if df is None or df.empty:
+            return None
+
+        raw = df.attrs.get("retrieved_at")
+
+        if not raw:
             return None
 
         value = pd.to_datetime(
-            df["Date"],
+            raw,
             errors="coerce",
             utc=True
-        ).max()
+        )
 
         if pd.isna(value):
             return None
 
         return value.to_pydatetime()
 
-    def latest_news_time(df):
-        if (
-            df is None
-            or df.empty
-            or "PublishedUTC" not in df.columns
-        ):
-            return None
+    brent_status = frame_status(brent_df)
+    wti_status = frame_status(wti_df)
+    news_status = frame_status(
+        news_df,
+        is_news=True
+    )
 
-        value = pd.to_datetime(
-            df["PublishedUTC"],
-            errors="coerce",
-            utc=True
-        ).max()
+    statuses = [
+        brent_status,
+        wti_status,
+        news_status,
+    ]
 
-        if pd.isna(value):
-            return None
-
-        return value.to_pydatetime()
-
-    brent_time = latest_market_time(brent_df)
-    wti_time = latest_market_time(wti_df)
-    news_time = latest_news_time(news_df)
-
-    valid_times = [
-        value for value in (brent_time, wti_time, news_time)
+    retrieval_times = [
+        value
+        for value in (
+            retrieval_time(brent_df),
+            retrieval_time(wti_df),
+            retrieval_time(news_df),
+        )
         if value is not None
     ]
 
-    freshest = max(valid_times) if valid_times else None
-
-    age_minutes = (
-        max(0, int((now - freshest).total_seconds() / 60))
-        if freshest else None
+    oldest_retrieval = (
+        min(retrieval_times)
+        if retrieval_times
+        else None
     )
 
-    if age_minutes is None:
+    age_minutes = (
+        max(
+            0,
+            int(
+                (
+                    now - oldest_retrieval
+                ).total_seconds() / 60
+            )
+        )
+        if oldest_retrieval
+        else None
+    )
+
+    if "UNAVAILABLE" in statuses:
+        freshness_state = "UNAVAILABLE"
+    elif "FALLBACK" in statuses:
+        freshness_state = "FALLBACK"
+    elif age_minutes is None:
         freshness_state = "UNAVAILABLE"
     elif age_minutes <= 20:
         freshness_state = "LIVE"
-    elif age_minutes <= 90:
-        freshness_state = "STALE"
     else:
-        freshness_state = "FALLBACK"
+        freshness_state = "STALE"
 
     st.markdown("### 🟢 System Health")
 
@@ -1167,41 +1228,39 @@ def render_system_health(brent_df, wti_df, news_df):
             st.cache_data.clear()
             st.rerun()
 
+    def render_source(label, status):
+        if status == "LIVE":
+            st.success(f"{label}: ONLINE")
+        elif status == "FALLBACK":
+            st.warning(f"{label}: FALLBACK")
+        else:
+            st.error(f"{label}: UNAVAILABLE")
+
     s1, s2, s3 = st.columns(3)
 
     with s1:
-        if brent_df is not None and not brent_df.empty:
-            st.success("Brent source: ONLINE")
-        else:
-            st.error("Brent source: UNAVAILABLE")
-
-    with s2:
-        if wti_df is not None and not wti_df.empty:
-            st.success("WTI source: ONLINE")
-        else:
-            st.error("WTI source: UNAVAILABLE")
-
-    with s3:
-        live_news = (
-            news_df is not None
-            and not news_df.empty
-            and not (
-                len(news_df) == 1
-                and str(
-                    news_df.iloc[0].get("Source", "")
-                ).upper() == "PROCUREYE"
-            )
+        render_source(
+            "Brent source",
+            brent_status
         )
 
-        if live_news:
-            st.success("News sources: ONLINE")
-        else:
-            st.warning("News sources: FALLBACK")
+    with s2:
+        render_source(
+            "WTI source",
+            wti_status
+        )
+
+    with s3:
+        render_source(
+            "News sources",
+            news_status
+        )
 
     st.caption(
         "Prices refresh every 5 minutes; "
         "news refresh every 15 minutes."
     )
+
 
 # ===== MAIN APPLICATION =====
 
@@ -6264,7 +6323,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.5 DEV · News Quality & Confidence Clarity
+    <div class="pe-release">Release 47.6.5.1 DEV
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6511,10 +6570,22 @@ def load_price_series(csv_name, ticker):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_market_data():
-    return (
-        load_price_series("brent.csv", "BZ=F"),
-        load_price_series("wti.csv", "CL=F")
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    brent_data = load_price_series(
+        "brent.csv",
+        "BZ=F"
     )
+    wti_data = load_price_series(
+        "wti.csv",
+        "CL=F"
+    )
+
+    for frame in (brent_data, wti_data):
+        if frame is not None:
+            frame.attrs["retrieved_at"] = retrieved_at
+
+    return brent_data, wti_data
 
 def metrics(df):
     if df.empty:
@@ -8759,3 +8830,7 @@ if __name__ == "__main__":
 # PROCUREYE RELEASE 47.6.5 NEWS QUALITY DEV
 # Oil relevance, bearish classification, title cleaning,
 # directional ranking and confidence-label clarity.
+
+
+# PROCUREYE RELEASE 47.6.5.1 HEALTH TIMESTAMP DEV
+# Retrieval-based freshness and real source status.
