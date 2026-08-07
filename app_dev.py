@@ -1218,9 +1218,9 @@ def render_executive_dashboard(
         )
 
     with c3:
-        st.metric(
+        pe47_status_metric(
             "Signal",
-            str(signal),
+            str(signal)
         )
 
     with c4:
@@ -1250,15 +1250,15 @@ def render_executive_dashboard(
         )
 
     with d2:
-        st.metric(
+        pe47_status_metric(
             "Brent Trend",
-            str(brent.get("trend", "UNKNOWN")),
+            str(brent.get("trend", "UNKNOWN"))
         )
 
     with d3:
-        st.metric(
+        pe47_status_metric(
             "WTI Trend",
-            str(wti.get("trend", "UNKNOWN")),
+            str(wti.get("trend", "UNKNOWN"))
         )
 
     with d4:
@@ -1506,7 +1506,7 @@ def render_decision_journal():
         )
 
     st.dataframe(
-        frame.head(20),
+        pe47_semantic_df(frame.head(20)),
         width="stretch",
         hide_index=True
     )
@@ -2091,17 +2091,18 @@ def render_daily_market_brief(brief):
     st.markdown(
         f"""
 **Market structure**  
-{brief["structure"]}
+{pe47_semantic_inline(brief["structure"])}
 
 **Momentum**  
-{brief["momentum"]}
+{pe47_semantic_inline(brief["momentum"])}
 
 **News intelligence**  
-{brief["news"]}
+{pe47_semantic_inline(brief["news"])}
 
 **Decision**  
-{brief["decision"]}
-"""
+{pe47_semantic_inline(brief["decision"])}
+""",
+        unsafe_allow_html=True
     )
 
     st.info(brief["action"])
@@ -2123,7 +2124,7 @@ def render_driver_intelligence_panel(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2147,7 +2148,7 @@ def render_driver_intelligence_panel(report):
         and not drivers.empty
     ):
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -2382,7 +2383,7 @@ def render_driver_intelligence_panel(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2403,7 +2404,7 @@ def render_driver_intelligence_panel(report):
 
     if isinstance(drivers, pd.DataFrame) and not drivers.empty:
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -2569,7 +2570,7 @@ def render_market_movers_ranking(ranking):
         )
 
     with r2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             str(leader["Direction"])
         )
@@ -2587,7 +2588,7 @@ def render_market_movers_ranking(ranking):
         )
 
     st.dataframe(
-        ranking,
+        pe47_semantic_df(ranking),
         width="stretch",
         hide_index=True,
         column_config={
@@ -2836,7 +2837,7 @@ def render_driver_correlation(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Combined Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2857,7 +2858,7 @@ def render_driver_correlation(report):
 
     if isinstance(details, pd.DataFrame) and not details.empty:
         st.dataframe(
-            details,
+            pe47_semantic_df(details),
             width="stretch",
             hide_index=True,
             column_config={
@@ -3205,7 +3206,7 @@ def render_historical_driver_memory(memory):
         )
 
     with m3:
-        st.metric(
+        pe47_status_metric(
             "Latest Direction",
             memory.get(
                 "latest_direction",
@@ -3235,7 +3236,7 @@ def render_historical_driver_memory(memory):
             "Recent driver-memory observations"
         ):
             st.dataframe(
-                history.head(25),
+                pe47_semantic_df(history.head(25)),
                 width="stretch",
                 hide_index=True
             )
@@ -3980,7 +3981,7 @@ def render_explainable_decision_v2(report):
     x1, x2, x3, x4 = st.columns(4)
 
     with x1:
-        st.metric(
+        pe47_status_metric(
             "Decision",
             report.get("signal", "WAIT")
         )
@@ -4023,7 +4024,7 @@ def render_explainable_decision_v2(report):
         st.markdown("#### Decision evidence")
 
         st.dataframe(
-            evidence,
+            pe47_semantic_df(evidence),
             width="stretch",
             hide_index=True,
             column_config={
@@ -4224,7 +4225,10 @@ def render_predictive_intelligence(report):
     a, b, c, d = st.columns(4)
 
     with a:
-        st.metric("Prediction", report["prediction"])
+        pe47_status_metric(
+            "Prediction",
+            report["prediction"]
+        )
 
     with b:
         st.metric(
@@ -4242,7 +4246,7 @@ def render_predictive_intelligence(report):
         )
 
     st.dataframe(
-        report["table"],
+        pe47_semantic_df(report["table"]),
         width="stretch",
         hide_index=True,
         column_config={
@@ -4527,7 +4531,7 @@ def render_scenario_engine(report):
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        st.metric(
+        pe47_status_metric(
             "Leading Scenario",
             report.get(
                 "leading_scenario",
@@ -4536,7 +4540,7 @@ def render_scenario_engine(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Expected Signal",
             report.get(
                 "leading_signal",
@@ -4566,7 +4570,7 @@ def render_scenario_engine(report):
     ):
 
         st.dataframe(
-            scenarios,
+            pe47_semantic_df(scenarios),
             width="stretch",
             hide_index=True,
             column_config={
@@ -4829,7 +4833,7 @@ def render_driver_forecast(report):
         )
 
     with f2:
-        st.metric(
+        pe47_status_metric(
             "Expected Direction",
             report.get(
                 "direction",
@@ -4856,7 +4860,7 @@ def render_driver_forecast(report):
 
     if isinstance(drivers, pd.DataFrame) and not drivers.empty:
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -5634,7 +5638,7 @@ def render_learning_statistics(report):
         st.markdown("#### Accuracy by Signal")
 
         st.dataframe(
-            by_signal,
+            pe47_semantic_df(by_signal),
             width="stretch",
             hide_index=True,
             column_config={
@@ -5676,7 +5680,7 @@ def render_learning_statistics(report):
         st.markdown("#### Accuracy by Scenario")
 
         st.dataframe(
-            by_scenario,
+            pe47_semantic_df(by_scenario),
             width="stretch",
             hide_index=True
         )
@@ -5797,11 +5801,8 @@ def pe47_compact_metric(
 
 # PROCUREYE 47.2 SEMANTIC HELPER START
 
-def pe47_status_metric(label, value):
-
-    import html
-
-    clean = (
+def _pe47_clean_state(value):
+    return (
         str(value)
         .replace("🟢", "")
         .replace("🔴", "")
@@ -5810,17 +5811,56 @@ def pe47_status_metric(label, value):
         .upper()
     )
 
-    if clean in ("LONG", "BULLISH"):
-        css_class = "pe47-bull"
 
-    elif clean in ("SHORT", "BEARISH"):
-        css_class = "pe47-bear"
+def _pe47_semantic_class(value):
 
-    elif clean in ("WAIT", "NEUTRAL"):
-        css_class = "pe47-neutral"
+    clean = _pe47_clean_state(value)
 
-    else:
-        css_class = "pe47-standard"
+    if clean in (
+        "LONG",
+        "BULLISH",
+        "BULL"
+    ):
+        return "pe47-bull"
+
+    if clean in (
+        "SHORT",
+        "BEARISH",
+        "BEAR"
+    ):
+        return "pe47-bear"
+
+    if clean in (
+        "WAIT",
+        "NEUTRAL",
+        "BASE"
+    ):
+        return "pe47-neutral"
+
+    return "pe47-standard"
+
+
+def pe47_status_metric(
+    label,
+    value,
+    delta=None
+):
+    import html
+
+    clean = _pe47_clean_state(value)
+
+    css_class = _pe47_semantic_class(
+        clean
+    )
+
+    delta_html = ""
+
+    if delta is not None:
+        delta_html = (
+            '<div class="pe47-status-delta">'
+            + html.escape(str(delta))
+            + '</div>'
+        )
 
     st.markdown(
         f"""
@@ -5828,13 +5868,105 @@ def pe47_status_metric(label, value):
             <div class="pe47-status-label">
                 {html.escape(str(label))}
             </div>
+
             <div class="pe47-status-value {css_class}">
                 {html.escape(clean)}
             </div>
+
+            {delta_html}
         </div>
         """,
         unsafe_allow_html=True
     )
+
+
+def pe47_semantic_inline(value):
+
+    import html
+    import re
+
+    text = html.escape(str(value))
+
+    patterns = [
+        (
+            r"\b(LONG|BULLISH|BULL)\b",
+            "pe47-bull"
+        ),
+        (
+            r"\b(SHORT|BEARISH|BEAR)\b",
+            "pe47-bear"
+        ),
+        (
+            r"\b(WAIT|NEUTRAL|BASE)\b",
+            "pe47-neutral"
+        )
+    ]
+
+    for pattern, css_class in patterns:
+
+        text = re.sub(
+            pattern,
+            lambda m:
+                f'<span class="{css_class}">'
+                f'{m.group(0)}</span>',
+            text,
+            flags=re.IGNORECASE
+        )
+
+    return text
+
+
+def pe47_semantic_df(frame):
+
+    if frame is None:
+        return frame
+
+    def semantic_style(value):
+
+        clean = _pe47_clean_state(value)
+
+        if clean in (
+            "LONG",
+            "BULLISH",
+            "BULL"
+        ):
+            return (
+                "color:#22C55E;"
+                "font-weight:700;"
+            )
+
+        if clean in (
+            "SHORT",
+            "BEARISH",
+            "BEAR"
+        ):
+            return (
+                "color:#EF4444;"
+                "font-weight:700;"
+            )
+
+        if clean in (
+            "WAIT",
+            "NEUTRAL",
+            "BASE"
+        ):
+            return (
+                "color:#FACC15;"
+                "font-weight:700;"
+            )
+
+        return ""
+
+    styler = frame.style
+
+    try:
+        return styler.map(
+            semantic_style
+        )
+    except AttributeError:
+        return styler.applymap(
+            semantic_style
+        )
 
 # PROCUREYE 47.2 SEMANTIC HELPER END
 
@@ -5989,7 +6121,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.4 VISUAL DEV · Executive Readability
+    <div class="pe-release">Release 47.5 VISUAL DEV · Semantic Consistency
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6688,7 +6820,7 @@ def run_procureye_dashboard():
                 )
 
             with n2:
-                st.metric(
+                pe47_status_metric(
                     "Expected impact",
                     row["Bias"],
                     f"{row['Impact']:+.1f}"
@@ -7937,6 +8069,72 @@ hr {
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.4 VISUAL
+
+
+# PROCUREYE RELEASE 47.5 VISUAL START
+
+st.markdown("""
+<style>
+
+/* Semantic values */
+.pe47-bull {
+    color:#22C55E !important;
+    font-weight:700 !important;
+}
+
+.pe47-bear {
+    color:#EF4444 !important;
+    font-weight:700 !important;
+}
+
+.pe47-neutral {
+    color:#FACC15 !important;
+    font-weight:700 !important;
+}
+
+/* Status card */
+.pe47-status-card {
+    background:#123B5D !important;
+    border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:8px !important;
+    padding:.50rem .70rem !important;
+    min-height:78px !important;
+}
+
+.pe47-status-label {
+    color:#FFFFFF !important;
+    font-size:.80rem !important;
+}
+
+.pe47-status-delta {
+    color:#FFFFFF !important;
+    font-size:.78rem !important;
+    margin-top:.15rem !important;
+}
+
+/* Tutto ciò che non è semantico nelle card scure resta bianco */
+.pe47-standard {
+    color:#FFFFFF !important;
+}
+
+/* Bottoni bianchi -> blue scuro */
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background:#FFFFFF !important;
+    color:#0B2D4D !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color:#0B2D4D !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.5 VISUAL
 
 if __name__ == "__main__":
     run_procureye_dashboard()
