@@ -5945,7 +5945,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.0 VISUAL DEV · Professional UI
+    <div class="pe-release">Release 47.1 VISUAL DEV · Layout Refinement
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -7075,6 +7075,215 @@ div[data-testid="stMetric"] {
 </style>
 """, unsafe_allow_html=True)
 
+
+
+# PROCUREYE RELEASE 47.1 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.1 — LAYOUT REFINEMENT
+   ========================================================== */
+
+:root {
+    --pe47-navy: #0B2D4D;
+    --pe47-white: #FFFFFF;
+    --pe47-green: #22C55E;
+    --pe47-red: #EF4444;
+    --pe47-yellow: #FACC15;
+    --pe47-border: rgba(190, 210, 225, .28);
+}
+
+
+/* ----------------------------------------------------------
+   SEZIONI — PIÙ ARIA, GERARCHIA PIÙ PULITA
+   ---------------------------------------------------------- */
+
+h2 {
+    margin-top: 1.65rem !important;
+    margin-bottom: 0.35rem !important;
+}
+
+h3 {
+    margin-top: 1.25rem !important;
+    margin-bottom: 0.30rem !important;
+}
+
+[data-testid="stCaptionContainer"] {
+    margin-bottom: 0.45rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRIC CARD
+   Card blu -> testo bianco
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding-top: 0.28rem !important;
+    padding-bottom: 0.28rem !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: var(--pe47-white) !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLORI SEMANTICI — PRIORITÀ MASSIMA
+   ---------------------------------------------------------- */
+
+/* LONG / BULLISH -> VERDE */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-green) !important;
+}
+
+
+/* SHORT / BEARISH -> ROSSO */
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-red) !important;
+}
+
+
+/* WAIT / NEUTRAL -> GIALLO */
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-yellow) !important;
+}
+
+
+/* Label delle metriche semantiche sempre bianche */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricLabel"] * {
+    color: var(--pe47-white) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE — PIÙ PICCOLO
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: 0.76rem !important;
+    line-height: 1.0 !important;
+
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION STATE / DECISION MODE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: 0.95rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI BIANCHI -> TESTO BLU SCURO
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: var(--pe47-white) !important;
+    color: var(--pe47-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    font-weight: 600 !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe47-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+
+    background-color: var(--pe47-white) !important;
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: var(--pe47-white) !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe47-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TABELLE — PIÙ COMPATTE
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    margin-top: 0.25rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   INFO / WARNING — RIDUCE RUMORE VISIVO
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    margin-top: 0.35rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   SPAZIATURA COLONNE
+   ---------------------------------------------------------- */
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.75rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.1 VISUAL
 
 if __name__ == "__main__":
     run_procureye_dashboard()
