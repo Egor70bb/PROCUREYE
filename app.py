@@ -4598,6 +4598,1117 @@ def render_scenario_engine(report):
 
 # END PROCUREYE RELEASE 44.0 DEV
 
+
+# ============================================================
+# PROCUREYE RELEASE 45.0 DEV — DRIVER FORECAST ENGINE
+# ============================================================
+
+def build_driver_forecast(
+    ranking,
+    driver_report,
+    correlation_report,
+    predictive
+):
+    def num(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    empty = {
+        "forecast_driver": "NONE",
+        "direction": "NEUTRAL",
+        "probability": 0.0,
+        "current_driver": "NONE",
+        "horizon": "24-72h",
+        "drivers": pd.DataFrame()
+    }
+
+    if not isinstance(ranking, pd.DataFrame) or ranking.empty:
+        return empty
+
+    frame = ranking.copy()
+
+    defaults = {
+        "Driver": "OIL MARKET",
+        "Direction": "NEUTRAL",
+        "Ranking Score": 0,
+        "Confidence": 50
+    }
+
+    for col, default in defaults.items():
+        if col not in frame.columns:
+            frame[col] = default
+
+    frame["Ranking Score"] = pd.to_numeric(
+        frame["Ranking Score"],
+        errors="coerce"
+    ).fillna(0)
+
+    frame["Confidence"] = pd.to_numeric(
+        frame["Confidence"],
+        errors="coerce"
+    ).fillna(50)
+
+    frame["Direction"] = (
+        frame["Direction"]
+        .astype(str)
+        .str.upper()
+    )
+
+    frame["Forecast Weight"] = (
+        frame["Ranking Score"] * 0.65
+        + frame["Confidence"] * 0.35
+    )
+
+    grouped = (
+        frame.groupby(
+            ["Driver", "Direction"],
+            as_index=False
+        )
+        .agg(
+            Evidence=("Driver", "size"),
+            Forecast_Score=("Forecast Weight", "sum"),
+            Avg_Confidence=("Confidence", "mean")
+        )
+    )
+
+    current_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+        if isinstance(driver_report, dict)
+        else "NONE"
+    )
+
+    current_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(driver_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    correlation_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(correlation_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    alignment = num(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    prediction = str(
+        predictive.get(
+            "prediction",
+            "WAIT"
+        )
+        if isinstance(predictive, dict)
+        else "WAIT"
+    ).upper()
+
+    predictive_direction = {
+        "LONG": "BULLISH",
+        "SHORT": "BEARISH",
+        "WAIT": "NEUTRAL"
+    }.get(prediction, "NEUTRAL")
+
+    def bonus(row):
+        value = 0.0
+
+        if str(row["Driver"]) == current_driver:
+            value += 12.0
+
+        if str(row["Direction"]) == current_direction:
+            value += 6.0
+
+        if str(row["Direction"]) == correlation_direction:
+            value += alignment * 0.10
+
+        if str(row["Direction"]) == predictive_direction:
+            value += 8.0
+
+        return value
+
+    grouped["Context Bonus"] = grouped.apply(
+        bonus,
+        axis=1
+    )
+
+    grouped["Forecast Score"] = (
+        grouped["Forecast_Score"]
+        + grouped["Context Bonus"]
+    )
+
+    grouped = grouped.sort_values(
+        ["Forecast Score", "Evidence"],
+        ascending=False
+    ).reset_index(drop=True)
+
+    total = grouped["Forecast Score"].clip(
+        lower=0
+    ).sum()
+
+    if total > 0:
+        grouped["Probability"] = (
+            grouped["Forecast Score"]
+            .clip(lower=0)
+            / total
+            * 100
+        )
+    else:
+        grouped["Probability"] = 0.0
+
+    grouped["Probability"] = grouped[
+        "Probability"
+    ].round(1)
+
+    grouped["Avg Confidence"] = grouped[
+        "Avg_Confidence"
+    ].round(0).astype(int)
+
+    grouped = grouped.rename(
+        columns={
+            "Forecast_Score": "Raw Evidence Score"
+        }
+    )
+
+    leader = grouped.iloc[0]
+
+    return {
+        "forecast_driver":
+            str(leader["Driver"]),
+        "direction":
+            str(leader["Direction"]),
+        "probability":
+            float(leader["Probability"]),
+        "current_driver":
+            current_driver,
+        "horizon":
+            "24-72h",
+        "drivers":
+            grouped[
+                [
+                    "Driver",
+                    "Direction",
+                    "Probability",
+                    "Evidence",
+                    "Avg Confidence"
+                ]
+            ].head(8)
+    }
+
+
+def render_driver_forecast(report):
+
+    section(
+        "Driver Forecast",
+        "Most likely dominant market driver over the next 24-72 hours"
+    )
+
+    f1, f2, f3, f4 = st.columns(4)
+
+    with f1:
+        st.metric(
+            "Likely Next Driver",
+            report.get(
+                "forecast_driver",
+                "NONE"
+            )
+        )
+
+    with f2:
+        st.metric(
+            "Expected Direction",
+            report.get(
+                "direction",
+                "NEUTRAL"
+            )
+        )
+
+    with f3:
+        st.metric(
+            "Driver Probability",
+            f"{report.get('probability', 0):.1f}%"
+        )
+
+    with f4:
+        st.metric(
+            "Forecast Horizon",
+            report.get(
+                "horizon",
+                "24-72h"
+            )
+        )
+
+    drivers = report.get("drivers")
+
+    if isinstance(drivers, pd.DataFrame) and not drivers.empty:
+        st.dataframe(
+            drivers,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Probability":
+                    st.column_config.ProgressColumn(
+                        "Probability",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    ),
+                "Avg Confidence":
+                    st.column_config.ProgressColumn(
+                        "Avg Confidence",
+                        min_value=0,
+                        max_value=100,
+                        format="%d%%"
+                    )
+            }
+        )
+
+    st.info(
+        f"Current driver: "
+        f"{report.get('current_driver', 'NONE')} · "
+        f"Likely next dominant driver: "
+        f"{report.get('forecast_driver', 'NONE')}."
+    )
+
+    st.caption(
+        "Forecast recalculates at every refresh from current "
+        "market-moving news, ranking, driver strength, "
+        "correlation and Predictive Intelligence."
+    )
+
+# END PROCUREYE RELEASE 45.0 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 46.0 DEV — PREDICTION ARCHIVE
+# ============================================================
+
+def record_prediction_archive(
+    predictive,
+    scenario,
+    forecast,
+    driver_report,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    brent,
+    wti
+):
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    file = Path(
+        "/tmp/procureye_prediction_history.csv"
+    )
+
+    now = datetime.now(timezone.utc)
+
+    def num(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def clean(value):
+        return (
+            str(value)
+            .replace("🟢", "")
+            .replace("🔴", "")
+            .replace("🟡", "")
+            .strip()
+            .upper()
+        )
+
+    row = {
+        "timestamp_utc": now.isoformat(),
+        "release": "46.0",
+
+        "signal": clean(signal),
+        "market_score": int(num(score)),
+
+        "confidence_v2": num(
+            confidence.get("score", 0)
+            if isinstance(confidence, dict)
+            else 0
+        ),
+
+        "risk": str(risk),
+        "regime": str(regime),
+
+        "prediction": str(
+            predictive.get("prediction", "WAIT")
+        ),
+
+        "long_probability": num(
+            predictive.get("long", 0)
+        ),
+
+        "wait_probability": num(
+            predictive.get("wait", 0)
+        ),
+
+        "short_probability": num(
+            predictive.get("short", 0)
+        ),
+
+        "prediction_probability": num(
+            predictive.get("probability", 0)
+        ),
+
+        "scenario": str(
+            scenario.get(
+                "leading_scenario",
+                "BASE"
+            )
+        ),
+
+        "scenario_probability": num(
+            scenario.get("probability", 0)
+        ),
+
+        "dominant_driver": str(
+            driver_report.get(
+                "dominant_driver",
+                "NONE"
+            )
+        ),
+
+        "driver_direction": str(
+            driver_report.get(
+                "direction",
+                "NEUTRAL"
+            )
+        ),
+
+        "forecast_driver": str(
+            forecast.get(
+                "forecast_driver",
+                "NONE"
+            )
+        ),
+
+        "forecast_direction": str(
+            forecast.get(
+                "direction",
+                "NEUTRAL"
+            )
+        ),
+
+        "forecast_probability": num(
+            forecast.get(
+                "probability",
+                0
+            )
+        ),
+
+        "brent": num(
+            brent.get("price")
+            if isinstance(brent, dict)
+            else None
+        ),
+
+        "wti": num(
+            wti.get("price")
+            if isinstance(wti, dict)
+            else None
+        )
+    }
+
+    if file.exists():
+        try:
+            history = pd.read_csv(file)
+        except Exception:
+            history = pd.DataFrame()
+    else:
+        history = pd.DataFrame()
+
+    store = True
+
+    if not history.empty:
+
+        try:
+            last = history.iloc[-1]
+
+            last_time = pd.to_datetime(
+                last["timestamp_utc"],
+                utc=True
+            )
+
+            elapsed = (
+                now
+                - last_time.to_pydatetime()
+            ).total_seconds() / 60
+
+            changed = any([
+                str(last.get("prediction"))
+                    != row["prediction"],
+
+                str(last.get("scenario"))
+                    != row["scenario"],
+
+                str(last.get("dominant_driver"))
+                    != row["dominant_driver"],
+
+                str(last.get("forecast_driver"))
+                    != row["forecast_driver"],
+
+                int(num(last.get("market_score")))
+                    != row["market_score"]
+            ])
+
+            store = (
+                elapsed >= 15
+                or changed
+            )
+
+        except Exception:
+            store = True
+
+    if store:
+
+        history = pd.concat(
+            [
+                history,
+                pd.DataFrame([row])
+            ],
+            ignore_index=True
+        )
+
+        history.to_csv(
+            file,
+            index=False
+        )
+
+    return {
+        "stored": store,
+        "rows": len(history),
+        "file": str(file)
+    }
+
+# END PROCUREYE RELEASE 46.0 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 46.1 DEV — OUTCOME VALIDATION
+# ============================================================
+
+def validate_prediction_outcomes(
+    brent,
+    wti,
+    minimum_age_hours=24
+):
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    file = Path("/tmp/procureye_prediction_history.csv")
+
+    result = {
+        "validated_now": 0,
+        "total_validated": 0,
+        "total_predictions": 0,
+        "accuracy": 0.0,
+        "latest_result": "WAITING"
+    }
+
+    if not file.exists():
+        return result
+
+    try:
+        history = pd.read_csv(file)
+    except Exception:
+        return result
+
+    if history.empty:
+        return result
+
+    result["total_predictions"] = len(history)
+
+    required_columns = {
+        "outcome_validated": False,
+        "outcome_timestamp_utc": "",
+        "brent_return_pct": None,
+        "wti_return_pct": None,
+        "market_return_pct": None,
+        "realized_state": "",
+        "prediction_correct": None,
+        "brier_score": None
+    }
+
+    for col, default in required_columns.items():
+        if col not in history.columns:
+            history[col] = default
+
+    def num(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    current_brent = num(
+        brent.get("price")
+        if isinstance(brent, dict)
+        else None
+    )
+
+    current_wti = num(
+        wti.get("price")
+        if isinstance(wti, dict)
+        else None
+    )
+
+    if current_brent <= 0 or current_wti <= 0:
+        return result
+
+    now = datetime.now(timezone.utc)
+    validated_now = 0
+
+    for idx, row in history.iterrows():
+
+        already_validated = str(
+            row.get("outcome_validated", False)
+        ).lower() in {"true", "1", "yes"}
+
+        if already_validated:
+            continue
+
+        try:
+            created = pd.to_datetime(
+                row["timestamp_utc"],
+                utc=True
+            ).to_pydatetime()
+        except Exception:
+            continue
+
+        age_hours = (
+            now - created
+        ).total_seconds() / 3600
+
+        if age_hours < minimum_age_hours:
+            continue
+
+        entry_brent = num(row.get("brent"))
+        entry_wti = num(row.get("wti"))
+
+        if entry_brent <= 0 or entry_wti <= 0:
+            continue
+
+        brent_return = (
+            current_brent / entry_brent - 1
+        ) * 100
+
+        wti_return = (
+            current_wti / entry_wti - 1
+        ) * 100
+
+        market_return = (
+            brent_return + wti_return
+        ) / 2
+
+        # Zona neutrale ±0.75%
+        if market_return >= 0.75:
+            realized = "LONG"
+        elif market_return <= -0.75:
+            realized = "SHORT"
+        else:
+            realized = "WAIT"
+
+        prediction = str(
+            row.get("prediction", "WAIT")
+        ).upper()
+
+        correct = prediction == realized
+
+        long_p = num(
+            row.get("long_probability")
+        ) / 100
+
+        wait_p = num(
+            row.get("wait_probability")
+        ) / 100
+
+        short_p = num(
+            row.get("short_probability")
+        ) / 100
+
+        actual = {
+            "LONG": (1, 0, 0),
+            "WAIT": (0, 1, 0),
+            "SHORT": (0, 0, 1)
+        }.get(
+            realized,
+            (0, 1, 0)
+        )
+
+        brier = (
+            (long_p - actual[0]) ** 2
+            + (wait_p - actual[1]) ** 2
+            + (short_p - actual[2]) ** 2
+        ) / 3
+
+        history.at[idx, "outcome_validated"] = True
+        history.at[idx, "outcome_timestamp_utc"] = now.isoformat()
+        history.at[idx, "brent_return_pct"] = round(brent_return, 3)
+        history.at[idx, "wti_return_pct"] = round(wti_return, 3)
+        history.at[idx, "market_return_pct"] = round(market_return, 3)
+        history.at[idx, "realized_state"] = realized
+        history.at[idx, "prediction_correct"] = bool(correct)
+        history.at[idx, "brier_score"] = round(brier, 4)
+
+        validated_now += 1
+
+    history.to_csv(
+        file,
+        index=False
+    )
+
+    validated = history[
+        history["outcome_validated"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ]
+
+    result["validated_now"] = validated_now
+    result["total_validated"] = len(validated)
+
+    if not validated.empty:
+
+        correct_series = (
+            validated["prediction_correct"]
+            .astype(str)
+            .str.lower()
+            .isin(["true", "1", "yes"])
+        )
+
+        result["accuracy"] = round(
+            correct_series.mean() * 100,
+            1
+        )
+
+        last = validated.iloc[-1]
+
+        result["latest_result"] = (
+            f"{last.get('prediction', 'WAIT')} → "
+            f"{last.get('realized_state', 'WAIT')} · "
+            f"{'CORRECT' if str(last.get('prediction_correct')).lower() in ['true','1','yes'] else 'WRONG'}"
+        )
+
+    return result
+
+
+def render_outcome_validation(report):
+
+    section(
+        "Outcome Validation",
+        "Automatic comparison between previous predictions and realized market direction"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Predictions Stored",
+            int(report.get("total_predictions", 0))
+        )
+
+    with c2:
+        st.metric(
+            "Validated",
+            int(report.get("total_validated", 0))
+        )
+
+    with c3:
+        st.metric(
+            "Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+
+    with c4:
+        st.metric(
+            "Validated Now",
+            int(report.get("validated_now", 0))
+        )
+
+    if report.get("total_validated", 0) == 0:
+        st.info(
+            "Outcome validation is active. "
+            "The first prediction becomes eligible after 24 hours."
+        )
+    else:
+        st.info(
+            f"Latest validation: "
+            f"{report.get('latest_result', 'N/A')}"
+        )
+
+    st.caption(
+        "Realized state: LONG above +0.75%, "
+        "SHORT below -0.75%, otherwise WAIT, "
+        "using the average Brent/WTI return after at least 24 hours."
+    )
+
+# END PROCUREYE RELEASE 46.1 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 46.2 DEV — LEARNING STATISTICS
+# ============================================================
+
+def build_learning_statistics():
+
+    from pathlib import Path
+
+    file = Path(
+        "/tmp/procureye_prediction_history.csv"
+    )
+
+    empty = {
+        "predictions": 0,
+        "validated": 0,
+        "accuracy": 0.0,
+        "brier": 0.0,
+        "recent_accuracy": 0.0,
+        "by_signal": pd.DataFrame(),
+        "by_driver": pd.DataFrame(),
+        "by_scenario": pd.DataFrame(),
+        "by_confidence": pd.DataFrame()
+    }
+
+    if not file.exists():
+        return empty
+
+    try:
+        history = pd.read_csv(file)
+    except Exception:
+        return empty
+
+    if history.empty:
+        return empty
+
+    result = empty.copy()
+    result["predictions"] = len(history)
+
+    if "outcome_validated" not in history.columns:
+        return result
+
+    valid = history[
+        history["outcome_validated"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ].copy()
+
+    if valid.empty:
+        return result
+
+    valid["Correct"] = (
+        valid["prediction_correct"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    )
+
+    valid["CorrectInt"] = (
+        valid["Correct"].astype(int)
+    )
+
+    result["validated"] = len(valid)
+
+    result["accuracy"] = round(
+        valid["CorrectInt"].mean() * 100,
+        1
+    )
+
+    if "brier_score" in valid.columns:
+
+        brier = pd.to_numeric(
+            valid["brier_score"],
+            errors="coerce"
+        ).dropna()
+
+        if not brier.empty:
+            result["brier"] = round(
+                brier.mean(),
+                4
+            )
+
+    recent = valid.tail(30)
+
+    if not recent.empty:
+        result["recent_accuracy"] = round(
+            recent["CorrectInt"].mean() * 100,
+            1
+        )
+
+    # Accuracy per LONG / WAIT / SHORT
+    if "prediction" in valid.columns:
+
+        by_signal = (
+            valid.groupby("prediction")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={"prediction": "Signal"}
+            )
+        )
+
+        by_signal["Accuracy"] = (
+            by_signal["Accuracy"] * 100
+        ).round(1)
+
+        result["by_signal"] = by_signal
+
+    # Accuracy per driver
+    if "dominant_driver" in valid.columns:
+
+        by_driver = (
+            valid.groupby("dominant_driver")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={
+                    "dominant_driver": "Driver"
+                }
+            )
+        )
+
+        by_driver["Accuracy"] = (
+            by_driver["Accuracy"] * 100
+        ).round(1)
+
+        result["by_driver"] = (
+            by_driver.sort_values(
+                ["Predictions", "Accuracy"],
+                ascending=False
+            )
+        )
+
+    # Accuracy per Scenario
+    if "scenario" in valid.columns:
+
+        by_scenario = (
+            valid.groupby("scenario")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={"scenario": "Scenario"}
+            )
+        )
+
+        by_scenario["Accuracy"] = (
+            by_scenario["Accuracy"] * 100
+        ).round(1)
+
+        result["by_scenario"] = by_scenario
+
+    # Accuracy per Confidence bucket
+    if "confidence_v2" in valid.columns:
+
+        confidence = pd.to_numeric(
+            valid["confidence_v2"],
+            errors="coerce"
+        )
+
+        valid["Confidence Bucket"] = pd.cut(
+            confidence,
+            bins=[-1, 39, 54, 69, 84, 100],
+            labels=[
+                "VERY LOW",
+                "LOW",
+                "MEDIUM",
+                "HIGH",
+                "VERY HIGH"
+            ]
+        )
+
+        by_confidence = (
+            valid.dropna(
+                subset=["Confidence Bucket"]
+            )
+            .groupby(
+                "Confidence Bucket",
+                observed=True
+            )
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+        )
+
+        by_confidence["Accuracy"] = (
+            by_confidence["Accuracy"] * 100
+        ).round(1)
+
+        result["by_confidence"] = (
+            by_confidence
+        )
+
+    return result
+
+
+def render_learning_statistics(report):
+
+    section(
+        "Learning Statistics",
+        "Observed predictive performance — no automatic weight changes"
+    )
+
+    a, b, c, d = st.columns(4)
+
+    with a:
+        st.metric(
+            "Predictions",
+            int(report.get("predictions", 0))
+        )
+
+    with b:
+        st.metric(
+            "Validated",
+            int(report.get("validated", 0))
+        )
+
+    with c:
+        st.metric(
+            "Overall Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+
+    with d:
+        st.metric(
+            "Last 30 Accuracy",
+            f"{report.get('recent_accuracy', 0):.1f}%"
+        )
+
+    if report.get("validated", 0) == 0:
+
+        st.info(
+            "Learning Statistics is active. "
+            "Statistics will appear after the first "
+            "24-hour outcomes are validated."
+        )
+
+        return
+
+    st.metric(
+        "Average Brier Score",
+        f"{report.get('brier', 0):.4f}"
+    )
+
+    by_signal = report.get("by_signal")
+
+    if isinstance(by_signal, pd.DataFrame) and not by_signal.empty:
+
+        st.markdown("#### Accuracy by Signal")
+
+        st.dataframe(
+            by_signal,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Accuracy":
+                    st.column_config.ProgressColumn(
+                        "Accuracy",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    by_driver = report.get("by_driver")
+
+    if isinstance(by_driver, pd.DataFrame) and not by_driver.empty:
+
+        st.markdown("#### Accuracy by Driver")
+
+        st.dataframe(
+            by_driver.head(10),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Accuracy":
+                    st.column_config.ProgressColumn(
+                        "Accuracy",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    by_scenario = report.get("by_scenario")
+
+    if isinstance(by_scenario, pd.DataFrame) and not by_scenario.empty:
+
+        st.markdown("#### Accuracy by Scenario")
+
+        st.dataframe(
+            by_scenario,
+            width="stretch",
+            hide_index=True
+        )
+
+    by_confidence = report.get(
+        "by_confidence"
+    )
+
+    if (
+        isinstance(by_confidence, pd.DataFrame)
+        and not by_confidence.empty
+    ):
+
+        st.markdown(
+            "#### Accuracy by Confidence"
+        )
+
+        st.dataframe(
+            by_confidence,
+            width="stretch",
+            hide_index=True
+        )
+
+    st.caption(
+        "Learning Statistics measures historical performance only. "
+        "Release 46.2 does not modify Predictive Intelligence weights."
+    )
+
+# END PROCUREYE RELEASE 46.2 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -4749,7 +5860,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 44.0 · Scenario Engine
+    <div class="pe-release">Release 46.2 · Learning Statistics
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -5549,6 +6660,41 @@ def run_procureye_dashboard():
     render_scenario_engine(
         scenario_engine
     )
+
+    driver_forecast = build_driver_forecast(
+        ranking=market_movers_ranking,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        predictive=predictive_intelligence
+    )
+
+    render_driver_forecast(driver_forecast)
+
+    prediction_archive_status = record_prediction_archive(
+        predictive=predictive_intelligence,
+        scenario=scenario_engine,
+        forecast=driver_forecast,
+        driver_report=driver_intelligence,
+        signal=signal,
+        score=score,
+        confidence=confidence_intelligence_v2,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti
+    )
+
+    outcome_validation = validate_prediction_outcomes(
+        brent=brent,
+        wti=wti,
+        minimum_age_hours=24
+    )
+
+    render_outcome_validation(outcome_validation)
+
+    learning_statistics = build_learning_statistics()
+
+    render_learning_statistics(learning_statistics)
 
     record_decision_journal(
         brent=brent,
