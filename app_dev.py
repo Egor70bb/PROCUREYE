@@ -317,6 +317,16 @@ BEARISH_RULES = {
     "ceasefire": 12,
     "dollar rises": 14,
     "rate hike": 13,
+    "price falls": 22,
+    "prices fall": 22,
+    "falls below": 18,
+    "hits 3-year low": 28,
+    "hits three-year low": 28,
+    "three-year low": 25,
+    "lowers demand forecast": 28,
+    "cuts demand forecast": 28,
+    "demand forecast cut": 26,
+    "reduces demand forecast": 28,
 }
 
 
@@ -339,6 +349,28 @@ OIL_RELEVANCE = {
     "tanker": 9,
     "sanction": 10,
 }
+
+
+CORE_OIL_MARKET_TERMS = (
+    "crude oil",
+    "brent",
+    "wti",
+    "oil price",
+    "oil market",
+    "opec",
+    "crude supply",
+    "crude demand",
+    "crude inventories",
+    "oil inventories",
+    "petroleum market",
+)
+
+
+TITLE_NOISE_PATTERNS = (
+    r"\s+Apple\s+\w+\s+\d+(?:\.\d+)?"
+    r"\s*\([A-Za-z0-9_-]{8,}\)\s*$",
+    r"\s*\([A-Za-z0-9_-]{12,}\)\s*$",
+)
 
 
 def _plain_text(value):
@@ -394,6 +426,14 @@ def _clean_title(entry_title, source):
 
     if title.lower().endswith(suffix.lower()):
         title = title[:-len(suffix)].strip()
+
+    for pattern in TITLE_NOISE_PATTERNS:
+        title = re.sub(
+            pattern,
+            "",
+            title,
+            flags=re.IGNORECASE
+        ).strip()
 
     return title
 
@@ -487,6 +527,10 @@ def _analyse(title, summary, source, published):
     text = f"{title} {summary}".lower()
 
     relevance = _term_score(text, OIL_RELEVANCE)
+    core_oil_relevant = any(
+        term in text
+        for term in CORE_OIL_MARKET_TERMS
+    )
     bullish_score = _term_score(text, BULLISH_RULES)
     bearish_score = _term_score(text, BEARISH_RULES)
     source_quality = _source_score(source)
@@ -552,6 +596,7 @@ def _analyse(title, summary, source, published):
         "Confidence": confidence,
         "Reason": reason,
         "AgeHours": round(age_hours, 1),
+        "CoreOilRelevant": core_oil_relevant,
     }
 
 
@@ -626,7 +671,10 @@ def get_market_movers(limit=3):
                 published=published
             )
 
-            if analysis["Importance"] < 25:
+            if (
+                analysis["Importance"] < 25
+                or not analysis["CoreOilRelevant"]
+            ):
                 continue
 
             rows.append({
@@ -670,14 +718,24 @@ def get_market_movers(limit=3):
 
     frame = pd.DataFrame(rows)
 
+    frame["_DirectionalRank"] = (
+        pd.to_numeric(
+            frame["Impact"],
+            errors="coerce"
+        )
+        .fillna(0)
+        .abs()
+    )
+
     frame = (
         frame.sort_values(
             [
+                "_DirectionalRank",
                 "Importance",
                 "Confidence",
                 "PublishedUTC"
             ],
-            ascending=[False, False, False]
+            ascending=[False, False, False, False]
         )
         .drop_duplicates("Dedup")
     )
@@ -710,7 +768,7 @@ def get_market_movers(limit=3):
                 break
 
     result = pd.DataFrame(selected).drop(
-        columns=["Dedup"],
+        columns=["Dedup", "_DirectionalRank"],
         errors="ignore"
     )
 
@@ -6206,7 +6264,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.4 VISUAL DEV · Back to Top Position
+    <div class="pe-release">Release 47.6.5 DEV · News Quality & Confidence Clarity
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6786,7 +6844,7 @@ def run_procureye_dashboard():
 
     with q3:
         st.metric(
-            "Confidence",
+            "Signal Confidence",
             confidence
         )
 
@@ -6837,7 +6895,7 @@ def run_procureye_dashboard():
         st.metric("Market Score", f"{score}/100")
 
     with c5:
-        st.metric("Confidence", confidence)
+        st.metric("Signal Confidence", confidence)
 
     with c6:
         st.metric("Risk", risk)
@@ -8696,3 +8754,8 @@ st.markdown("""
 
 if __name__ == "__main__":
     run_procureye_dashboard()
+
+
+# PROCUREYE RELEASE 47.6.5 NEWS QUALITY DEV
+# Oil relevance, bearish classification, title cleaning,
+# directional ranking and confidence-label clarity.
