@@ -4894,6 +4894,219 @@ def render_driver_forecast(report):
 
 # END PROCUREYE RELEASE 45.0 DEV
 
+
+# ============================================================
+# PROCUREYE RELEASE 46.0 DEV — PREDICTION ARCHIVE
+# ============================================================
+
+def record_prediction_archive(
+    predictive,
+    scenario,
+    forecast,
+    driver_report,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    brent,
+    wti
+):
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    file = Path(
+        "/tmp/procureye_prediction_history.csv"
+    )
+
+    now = datetime.now(timezone.utc)
+
+    def num(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def clean(value):
+        return (
+            str(value)
+            .replace("🟢", "")
+            .replace("🔴", "")
+            .replace("🟡", "")
+            .strip()
+            .upper()
+        )
+
+    row = {
+        "timestamp_utc": now.isoformat(),
+        "release": "46.0",
+
+        "signal": clean(signal),
+        "market_score": int(num(score)),
+
+        "confidence_v2": num(
+            confidence.get("score", 0)
+            if isinstance(confidence, dict)
+            else 0
+        ),
+
+        "risk": str(risk),
+        "regime": str(regime),
+
+        "prediction": str(
+            predictive.get("prediction", "WAIT")
+        ),
+
+        "long_probability": num(
+            predictive.get("long", 0)
+        ),
+
+        "wait_probability": num(
+            predictive.get("wait", 0)
+        ),
+
+        "short_probability": num(
+            predictive.get("short", 0)
+        ),
+
+        "prediction_probability": num(
+            predictive.get("probability", 0)
+        ),
+
+        "scenario": str(
+            scenario.get(
+                "leading_scenario",
+                "BASE"
+            )
+        ),
+
+        "scenario_probability": num(
+            scenario.get("probability", 0)
+        ),
+
+        "dominant_driver": str(
+            driver_report.get(
+                "dominant_driver",
+                "NONE"
+            )
+        ),
+
+        "driver_direction": str(
+            driver_report.get(
+                "direction",
+                "NEUTRAL"
+            )
+        ),
+
+        "forecast_driver": str(
+            forecast.get(
+                "forecast_driver",
+                "NONE"
+            )
+        ),
+
+        "forecast_direction": str(
+            forecast.get(
+                "direction",
+                "NEUTRAL"
+            )
+        ),
+
+        "forecast_probability": num(
+            forecast.get(
+                "probability",
+                0
+            )
+        ),
+
+        "brent": num(
+            brent.get("price")
+            if isinstance(brent, dict)
+            else None
+        ),
+
+        "wti": num(
+            wti.get("price")
+            if isinstance(wti, dict)
+            else None
+        )
+    }
+
+    if file.exists():
+        try:
+            history = pd.read_csv(file)
+        except Exception:
+            history = pd.DataFrame()
+    else:
+        history = pd.DataFrame()
+
+    store = True
+
+    if not history.empty:
+
+        try:
+            last = history.iloc[-1]
+
+            last_time = pd.to_datetime(
+                last["timestamp_utc"],
+                utc=True
+            )
+
+            elapsed = (
+                now
+                - last_time.to_pydatetime()
+            ).total_seconds() / 60
+
+            changed = any([
+                str(last.get("prediction"))
+                    != row["prediction"],
+
+                str(last.get("scenario"))
+                    != row["scenario"],
+
+                str(last.get("dominant_driver"))
+                    != row["dominant_driver"],
+
+                str(last.get("forecast_driver"))
+                    != row["forecast_driver"],
+
+                int(num(last.get("market_score")))
+                    != row["market_score"]
+            ])
+
+            store = (
+                elapsed >= 15
+                or changed
+            )
+
+        except Exception:
+            store = True
+
+    if store:
+
+        history = pd.concat(
+            [
+                history,
+                pd.DataFrame([row])
+            ],
+            ignore_index=True
+        )
+
+        history.to_csv(
+            file,
+            index=False
+        )
+
+    return {
+        "stored": store,
+        "rows": len(history),
+        "file": str(file)
+    }
+
+# END PROCUREYE RELEASE 46.0 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -5045,7 +5258,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 45.0 DEV · Driver Forecast
+    <div class="pe-release">Release 46.0 DEV · Prediction Archive
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -5854,6 +6067,20 @@ def run_procureye_dashboard():
     )
 
     render_driver_forecast(driver_forecast)
+
+    prediction_archive_status = record_prediction_archive(
+        predictive=predictive_intelligence,
+        scenario=scenario_engine,
+        forecast=driver_forecast,
+        driver_report=driver_intelligence,
+        signal=signal,
+        score=score,
+        confidence=confidence_intelligence_v2,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti
+    )
 
     record_decision_journal(
         brent=brent,
