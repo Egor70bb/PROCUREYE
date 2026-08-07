@@ -6206,7 +6206,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6 VISUAL DEV · Quick Navigation
+    <div class="pe-release">Release 47.6.1 VISUAL DEV · Quick Navigation + Back to Top
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6742,6 +6742,8 @@ def run_procureye_dashboard():
         wti=wti,
         adaptive_news=adaptive_news
     )
+
+    pe47_anchor("procureye-top")
 
     section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
     daily_market_brief = build_daily_market_brief(
@@ -8403,6 +8405,113 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.6 QUICK NAV STYLE
+
+
+# PROCUREYE RELEASE 47.6.1 BACK TO TOP START
+
+st.markdown(
+    """
+    <a
+        href="#procureye-top"
+        class="pe47-back-top"
+        title="Back to Executive Dashboard"
+        aria-label="Back to Executive Dashboard"
+    >
+        ↑
+    </a>
+    """,
+    unsafe_allow_html=True
+)
+
+# END PROCUREYE RELEASE 47.6.1 BACK TO TOP
+
+
+# PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE START
+
+st.markdown("""
+<style>
+
+/* Floating Back-to-Top button */
+
+.pe47-back-top,
+.pe47-back-top:link,
+.pe47-back-top:visited {
+
+    position: fixed;
+
+    right: 24px;
+    bottom: 24px;
+
+    width: 46px;
+    height: 46px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6;
+    border-radius: 50%;
+
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1;
+
+    text-decoration: none !important;
+
+    box-shadow:
+        0 4px 14px rgba(0,0,0,.22);
+
+    z-index: 999999;
+
+    transition:
+        transform .12s ease,
+        box-shadow .12s ease,
+        border-color .12s ease;
+}
+
+.pe47-back-top:hover {
+
+    color: #0B2D4D !important;
+
+    border-color: #35A8D4;
+
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 6px 18px rgba(0,0,0,.28);
+
+    text-decoration: none !important;
+}
+
+.pe47-back-top:active {
+    transform: translateY(0);
+}
+
+
+/* Mobile */
+
+@media (max-width: 760px) {
+
+    .pe47-back-top {
+
+        right: 14px;
+        bottom: 18px;
+
+        width: 42px;
+        height: 42px;
+
+        font-size: 1.25rem;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE
 
 if __name__ == "__main__":
     run_procureye_dashboard()
