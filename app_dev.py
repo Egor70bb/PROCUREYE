@@ -2083,29 +2083,70 @@ def build_daily_market_brief(
 
 
 def render_daily_market_brief(brief):
+
     section(
         "Daily Market Brief",
         "One-minute executive market summary"
     )
 
+    structure = pe47_semantic_inline(
+        brief["structure"]
+    )
+
+    momentum = pe47_semantic_inline(
+        brief["momentum"]
+    )
+
+    news_text = pe47_semantic_inline(
+        brief["news"]
+    )
+
+    decision = pe47_semantic_inline(
+        brief["decision"]
+    )
+
+    html_block = (
+        '<div class="pe47-brief">'
+        
+        '<div class="pe47-brief-title">'
+        'Market structure'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + structure +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'Momentum'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + momentum +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'News intelligence'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + news_text +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'Decision'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + decision +
+        '</div>'
+
+        '</div>'
+    )
+
     st.markdown(
-        f"""
-**Market structure**  
-{pe47_semantic_inline(brief["structure"])}
-
-**Momentum**  
-{pe47_semantic_inline(brief["momentum"])}
-
-**News intelligence**  
-{pe47_semantic_inline(brief["news"])}
-
-**Decision**  
-{pe47_semantic_inline(brief["decision"])}
-""",
+        html_block,
         unsafe_allow_html=True
     )
 
-    st.info(brief["action"])
+    st.info(
+        brief["action"]
+    )
 
 
 
@@ -5848,10 +5889,7 @@ def pe47_status_metric(
     import html
 
     clean = _pe47_clean_state(value)
-
-    css_class = _pe47_semantic_class(
-        clean
-    )
+    css_class = _pe47_semantic_class(clean)
 
     delta_html = ""
 
@@ -5862,22 +5900,25 @@ def pe47_status_metric(
             + '</div>'
         )
 
+    html_block = (
+        '<div class="pe47-status-card">'
+        '<div class="pe47-status-label">'
+        + html.escape(str(label))
+        + '</div>'
+        '<div class="pe47-status-value '
+        + css_class
+        + '">'
+        + html.escape(clean)
+        + '</div>'
+        + delta_html
+        + '</div>'
+    )
+
     st.markdown(
-        f"""
-        <div class="pe47-status-card">
-            <div class="pe47-status-label">
-                {html.escape(str(label))}
-            </div>
-
-            <div class="pe47-status-value {css_class}">
-                {html.escape(clean)}
-            </div>
-
-            {delta_html}
-        </div>
-        """,
+        html_block,
         unsafe_allow_html=True
     )
+
 
 
 def pe47_semantic_inline(value):
@@ -6121,7 +6162,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.5 VISUAL DEV · Semantic Consistency
+    <div class="pe-release">Release 47.5.1 VISUAL DEV · Semantic Rendering Fix
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -8135,6 +8176,67 @@ button[data-testid="stBaseButton-tertiary"] * {
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.5 VISUAL
+
+
+# PROCUREYE RELEASE 47.5.1 STYLE START
+
+st.markdown("""
+<style>
+
+.pe47-brief-title {
+    color:#FFFFFF !important;
+    font-weight:700 !important;
+    margin-top:.70rem !important;
+    margin-bottom:.12rem !important;
+}
+
+.pe47-brief-text {
+    color:#E8F1F6 !important;
+    line-height:1.45 !important;
+}
+
+/* LONG / BULLISH / BULL */
+.pe47-bull {
+    color:#22C55E !important;
+    font-weight:700 !important;
+}
+
+/* SHORT / BEARISH / BEAR */
+.pe47-bear {
+    color:#EF4444 !important;
+    font-weight:700 !important;
+}
+
+/* WAIT / NEUTRAL / BASE */
+.pe47-neutral {
+    color:#FACC15 !important;
+    font-weight:700 !important;
+}
+
+/* status card */
+.pe47-status-card {
+    background:#123B5D !important;
+    border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:8px !important;
+    padding:.50rem .70rem !important;
+    min-height:78px !important;
+}
+
+.pe47-status-label {
+    color:#FFFFFF !important;
+    font-size:.80rem !important;
+}
+
+.pe47-status-delta {
+    color:#FFFFFF !important;
+    font-size:.78rem !important;
+    margin-top:.15rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.5.1 STYLE
 
 if __name__ == "__main__":
     run_procureye_dashboard()
