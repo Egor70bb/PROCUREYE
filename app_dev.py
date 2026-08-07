@@ -6893,158 +6893,27 @@ def run_procureye_dashboard():
 
 
 
-# PROCUREYE FINAL VISUAL COLOR OVERRIDE
-st.markdown("""
-<style>
-
-/* BOTTONI BIANCHI = TESTO BLUE SCURO */
-div[data-testid="stButton"] button,
-button[data-testid="stBaseButton-secondary"],
-button[data-testid="stBaseButton-tertiary"] {
-    background: #FFFFFF !important;
-    color: #0B2D4D !important;
-    border-color: #B5C6D4 !important;
-}
-
-div[data-testid="stButton"] button *,
-button[data-testid="stBaseButton-secondary"] *,
-button[data-testid="stBaseButton-tertiary"] * {
-    color: #0B2D4D !important;
-}
-
-/* REFRESH NOW = BIANCO + BLUE SCURO */
-.st-key-global_refresh button,
-.st-key-global_refresh button * {
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
-}
-
-/* RIQUADRI BLU = TESTO BIANCO */
-div[data-testid="stMetric"] label,
-div[data-testid="stMetric"] label *,
-div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-    color: #FFFFFF !important;
-}
-
-/* Signal Change più piccolo */
-.st-key-pe_signal_change [data-testid="stMetricValue"] {
-    font-size: 0.82rem !important;
-    line-height: 1.05 !important;
-    white-space: normal !important;
-    overflow-wrap: anywhere !important;
-}
-
-/* BOTTONI BIANCHI DEI GRAFICI */
-.js-plotly-plot .rangeselector rect {
-    fill: #FFFFFF !important;
-}
-
-.js-plotly-plot .rangeselector text {
-    fill: #0B2D4D !important;
-    font-weight: 650 !important;
-}
-
-</style>
-""", unsafe_allow_html=True)
-# END PROCUREYE FINAL VISUAL COLOR OVERRIDE
 
 
 
-# PROCUREYE VISUAL 04 — FINAL COLOR SYSTEM
-st.markdown("""
-<style>
-
-/* ==========================================================
-   1. RIQUADRI BLU -> TESTO BIANCO COME RELEASE 46
-   ========================================================== */
-
-div[data-testid="stMetric"] {
-    color: #FFFFFF !important;
-}
-
-div[data-testid="stMetric"] label,
-div[data-testid="stMetric"] label *,
-div[data-testid="stMetric"] [data-testid="stMetricValue"],
-div[data-testid="stMetric"] [data-testid="stMetricValue"] *,
-div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
-    color: #FFFFFF !important;
-}
-
-/* ==========================================================
-   2. BOTTONI BIANCHI -> TESTO BLUE SCURO
-   ========================================================== */
-
-div[data-testid="stButton"] button,
-button[data-testid="stBaseButton-secondary"],
-button[data-testid="stBaseButton-tertiary"] {
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
-    border: 1px solid #B4C5D3 !important;
-    font-weight: 650 !important;
-}
-
-div[data-testid="stButton"] button *,
-button[data-testid="stBaseButton-secondary"] *,
-button[data-testid="stBaseButton-tertiary"] * {
-    color: #0B2D4D !important;
-}
-
-/* Refresh Now */
-.st-key-global_refresh button,
-.st-key-global_refresh button * {
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
-}
-
-/* ==========================================================
-   3. BOTTONI BIANCHI DEI GRAFICI
-   ========================================================== */
-
-.js-plotly-plot .rangeselector rect {
-    fill: #FFFFFF !important;
-}
-
-.js-plotly-plot .rangeselector text {
-    fill: #0B2D4D !important;
-    font-weight: 650 !important;
-}
-
-/* ==========================================================
-   4. SIGNAL CHANGE COMPATTO
-   ========================================================== */
-
-.st-key-pe_signal_change [data-testid="stMetricValue"] {
-    font-size: 0.80rem !important;
-    line-height: 1.05 !important;
-    white-space: normal !important;
-    overflow-wrap: anywhere !important;
-}
-
-/* Correlation State */
-.st-key-pe_correlation_state [data-testid="stMetricValue"] {
-    font-size: 1.02rem !important;
-}
-
-/* Decision Mode */
-.st-key-pe_decision_mode [data-testid="stMetricValue"] {
-    font-size: 1.02rem !important;
-}
-
-</style>
-""", unsafe_allow_html=True)
-# END PROCUREYE VISUAL 04
 
 
 
-# PROCUREYE SEMANTIC COLORS START
-
-_pe_original_metric = st.metric
-_pe_semantic_counter = 0
 
 
-def _pe_clean_semantic(value):
 
-    text = (
+
+
+
+# PROCUREYE VISUAL CLEANUP START
+
+_pe_real_metric = st.metric
+_pe_metric_count = 0
+
+
+def _pe_metric_color(value):
+
+    clean = (
         str(value)
         .replace("🟢", "")
         .replace("🔴", "")
@@ -7053,10 +6922,19 @@ def _pe_clean_semantic(value):
         .upper()
     )
 
-    return text
+    if clean in ("LONG", "BULLISH"):
+        return "bull"
+
+    if clean in ("SHORT", "BEARISH"):
+        return "bear"
+
+    if clean in ("WAIT", "NEUTRAL"):
+        return "neutral"
+
+    return None
 
 
-def _pe_semantic_metric(
+def _pe_metric(
     label,
     value,
     delta=None,
@@ -7067,35 +6945,15 @@ def _pe_semantic_metric(
     width="stretch"
 ):
 
-    global _pe_semantic_counter
+    global _pe_metric_count
 
-    semantic = _pe_clean_semantic(value)
+    semantic = _pe_metric_color(value)
 
-    color_group = None
+    if semantic is None:
 
-    if semantic in {
-        "LONG",
-        "BULLISH"
-    }:
-        color_group = "green"
-
-    elif semantic in {
-        "SHORT",
-        "BEARISH"
-    }:
-        color_group = "red"
-
-    elif semantic in {
-        "WAIT",
-        "NEUTRAL"
-    }:
-        color_group = "yellow"
-
-    if color_group is None:
-
-        return _pe_original_metric(
-            label=label,
-            value=value,
+        return _pe_real_metric(
+            label,
+            value,
             delta=delta,
             delta_color=delta_color,
             help=help,
@@ -7104,18 +6962,14 @@ def _pe_semantic_metric(
             width=width
         )
 
-    _pe_semantic_counter += 1
+    _pe_metric_count += 1
 
-    key = (
-        f"pe_semantic_{color_group}_"
-        f"{_pe_semantic_counter}"
-    )
-
-    with st.container(key=key):
-
-        return _pe_original_metric(
-            label=label,
-            value=value,
+    with st.container(
+        key=f"pe_{semantic}_{_pe_metric_count}"
+    ):
+        return _pe_real_metric(
+            label,
+            value,
             delta=delta,
             delta_color=delta_color,
             help=help,
@@ -7125,62 +6979,156 @@ def _pe_semantic_metric(
         )
 
 
-# Tutte le metriche successive usano automaticamente
-# la colorazione semantica.
-st.metric = _pe_semantic_metric
+st.metric = _pe_metric
 
 
 st.markdown("""
 <style>
 
-/* ==============================
-   BULLISH / LONG -> VERDE
-   ============================== */
+/* ==========================================================
+   PROCUREYE CLEAN COLOR SYSTEM
+   ========================================================== */
 
-[class*="st-key-pe_semantic_green"]
+
+/* ----------------------------------------------------------
+   CARD / RIQUADRI BLU:
+   come Release 46 -> scritte BIANCHE
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"],
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: #FFFFFF !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI:
+   solo BIANCHI con testo BLUE SCURO
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C8D5 !important;
+
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: #0B2D4D !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+
+    background-color: #FFFFFF !important;
+    color: #0B2D4D !important;
+}
+
+
+/* ----------------------------------------------------------
+   NON CREARE NUOVI RIQUADRI SCURI
+   ---------------------------------------------------------- */
+
+[class*="st-key-pe_bull"],
+[class*="st-key-pe_bear"],
+[class*="st-key-pe_neutral"] {
+
+    background: transparent !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLORI SEMANTICI
+   ---------------------------------------------------------- */
+
+/* LONG / BULLISH -> VERDE */
+[class*="st-key-pe_bull"]
 [data-testid="stMetricValue"],
-[class*="st-key-pe_semantic_green"]
+[class*="st-key-pe_bull"]
 [data-testid="stMetricValue"] * {
+
     color: #22C55E !important;
 }
 
 
-/* ==============================
-   BEARISH / SHORT -> ROSSO
-   ============================== */
-
-[class*="st-key-pe_semantic_red"]
+/* SHORT / BEARISH -> ROSSO */
+[class*="st-key-pe_bear"]
 [data-testid="stMetricValue"],
-[class*="st-key-pe_semantic_red"]
+[class*="st-key-pe_bear"]
 [data-testid="stMetricValue"] * {
+
     color: #EF4444 !important;
 }
 
 
-/* ==============================
-   WAIT / NEUTRAL -> GIALLO
-   ============================== */
-
-[class*="st-key-pe_semantic_yellow"]
+/* WAIT / NEUTRAL -> GIALLO */
+[class*="st-key-pe_neutral"]
 [data-testid="stMetricValue"],
-[class*="st-key-pe_semantic_yellow"]
+[class*="st-key-pe_neutral"]
 [data-testid="stMetricValue"] * {
+
     color: #FACC15 !important;
 }
 
 
-/* Le label dei riquadri blu restano BIANCHE */
-[class*="st-key-pe_semantic_"]
-[data-testid="stMetricLabel"],
-[class*="st-key-pe_semantic_"]
+/* Label della card sempre bianca */
+[class*="st-key-pe_bull"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe_bear"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe_neutral"]
 [data-testid="stMetricLabel"] * {
+
     color: #FFFFFF !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE PIÙ PICCOLO
+   ---------------------------------------------------------- */
+
+.st-key-pe_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: 0.82rem !important;
+    line-height: 1.05 !important;
+
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   PULSANTI GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+
+    fill: #0B2D4D !important;
+    font-weight: 650 !important;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
-# PROCUREYE SEMANTIC COLORS END
+# PROCUREYE VISUAL CLEANUP END
 
 
 if __name__ == "__main__":
