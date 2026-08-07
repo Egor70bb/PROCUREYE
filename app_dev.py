@@ -5989,7 +5989,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.3 VISUAL DEV · Visual Polish
+    <div class="pe-release">Release 47.4 VISUAL DEV · Executive Readability
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -7699,6 +7699,244 @@ button[data-testid="stBaseButton-tertiary"] * {
 
 # END PROCUREYE RELEASE 47.3 VISUAL
 
+
+
+# PROCUREYE RELEASE 47.4 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.4 — EXECUTIVE READABILITY
+   ========================================================== */
+
+:root {
+    --pe47-navy: #0B2D4D;
+    --pe47-white: #FFFFFF;
+    --pe47-green: #22C55E;
+    --pe47-red: #EF4444;
+    --pe47-yellow: #FACC15;
+}
+
+
+/* ----------------------------------------------------------
+   HEADER
+   ---------------------------------------------------------- */
+
+.pe-brand {
+    letter-spacing: .055em !important;
+}
+
+.pe-title {
+    margin-top: .20rem !important;
+    margin-bottom: .30rem !important;
+}
+
+.pe-copy {
+    max-width: 1100px !important;
+    line-height: 1.45 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TITOLI SEZIONE
+   più netti e meno "ammassati"
+   ---------------------------------------------------------- */
+
+h2 {
+    padding-top: .20rem !important;
+    margin-top: 1.65rem !important;
+}
+
+h3 {
+    margin-top: 1.20rem !important;
+}
+
+h2 + div,
+h3 + div {
+    margin-top: .15rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRICHE
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    min-height: 82px !important;
+}
+
+div[data-testid="stMetric"]
+[data-testid="stMetricLabel"] {
+    font-size: .78rem !important;
+}
+
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] {
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   STATUS COLORS 47.2
+   ---------------------------------------------------------- */
+
+.pe47-bull {
+    color: var(--pe47-green) !important;
+}
+
+.pe47-bear {
+    color: var(--pe47-red) !important;
+}
+
+.pe47-neutral {
+    color: var(--pe47-yellow) !important;
+}
+
+
+/* ----------------------------------------------------------
+   DAILY MARKET BRIEF
+   ---------------------------------------------------------- */
+
+[data-testid="stMarkdownContainer"] strong {
+    font-weight: 650;
+}
+
+
+/* ----------------------------------------------------------
+   INFO / WARNING BOX
+   meno invasivi
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    border-radius: 8px !important;
+}
+
+[data-testid="stAlert"] p {
+    line-height: 1.38 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TABELLE
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI
+   bianchi / testo blu scuro
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: #FFFFFF !important;
+    color: var(--pe47-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   REFRESH
+   ---------------------------------------------------------- */
+
+.st-key-global_refresh button {
+    background: #FFFFFF !important;
+    color: var(--pe47-navy) !important;
+}
+
+.st-key-global_refresh button * {
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: .70rem !important;
+    line-height: 1 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION / DECISION MODE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: .90rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe47-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   SEPARAZIONE VISIVA TRA BLOCCHI
+   ---------------------------------------------------------- */
+
+hr {
+    border-color: rgba(170,195,212,.20) !important;
+}
+
+
+/* ----------------------------------------------------------
+   MOBILE
+   ---------------------------------------------------------- */
+
+@media (max-width: 768px) {
+
+    div[data-testid="stMetric"] {
+        min-height: 70px !important;
+    }
+
+    .pe47-status-value {
+        font-size: 1rem !important;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.4 VISUAL
 
 if __name__ == "__main__":
     run_procureye_dashboard()
