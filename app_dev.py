@@ -895,7 +895,7 @@ def _clean_signal(value):
     )
 
 
-def render_market_delta(brent, wti, signal, score, confidence):
+def render_market_delta(brent, wti, signal, score, confidence, risk):
     SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     current = {
@@ -918,6 +918,21 @@ def render_market_delta(brent, wti, signal, score, confidence):
             previous = None
 
     st.markdown("### 📈 Since Last Refresh")
+
+    pe1, pe2, pe3, pe4 = st.columns(4)
+
+    with pe1:
+        st.metric("Signal", signal)
+
+    with pe2:
+        st.metric("Market Score", f"{score}/100")
+
+    with pe3:
+        st.metric("Confidence", confidence)
+
+    with pe4:
+        st.metric("Risk", risk)
+
 
     if not previous:
         st.caption(
@@ -964,14 +979,14 @@ def render_market_delta(brent, wti, signal, score, confidence):
 
         with c3:
             if old_signal != current["signal"]:
-                pe_metric(
+                pe_visual_metric(
                     "pe_signal_change",
                     "Signal Change",
                     _clean_signal(current["signal"]),
                     f"{_clean_signal(old_signal)} → {_clean_signal(current['signal'])}"
                 )
             else:
-                pe_metric(
+                pe_visual_metric(
                     "pe_signal_change",
                     "Signal Change",
                     "UNCHANGED",
@@ -1075,7 +1090,7 @@ def render_system_health(brent_df, wti_df, news_df):
     elif age_minutes <= 90:
         freshness_state = "STALE"
     else:
-        freshness_state = "BACKUP DATA"
+        freshness_state = "FALLBACK"
 
     st.markdown("### 🟢 System Health")
 
@@ -1138,7 +1153,7 @@ def render_system_health(brent_df, wti_df, news_df):
         if live_news:
             st.success("News sources: ONLINE")
         else:
-            st.warning("News sources: BACKUP")
+            st.warning("News sources: FALLBACK")
 
     st.caption(
         "Prices refresh every 5 minutes; "
@@ -2834,8 +2849,7 @@ def render_driver_correlation(report):
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        pe_metric(
-            "pe_correlation_state",
+        st.metric(
             "Correlation State",
             report.get("state", "UNKNOWN")
         )
@@ -5713,9 +5727,10 @@ def render_learning_statistics(report):
 # END PROCUREYE RELEASE 46.2 DEV
 
 
-def pe_metric(key, label, value, *args, **kwargs):
+def pe_visual_metric(key, label, value, *args, **kwargs):
     with st.container(key=key):
         st.metric(label, value, *args, **kwargs)
+
 
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
@@ -5727,45 +5742,78 @@ st.set_page_config(
 st.markdown("""
 <style>
 
-/* Tutti i bottoni bianchi -> testo blu scuro */
+/* =========================================================
+   PROCUREYE — WHITE / DARK BLUE SYSTEM
+   ========================================================= */
+
+/* BOTTONI: BIANCO + BLUE SCURO */
 div[data-testid="stButton"] button {
+    background-color: #FFFFFF !important;
     color: #0B2D4D !important;
-    font-weight: 600 !important;
+    border: 1px solid #B9C9D6 !important;
+    font-weight: 650 !important;
 }
 
-div[data-testid="stButton"] button p {
+div[data-testid="stButton"] button p,
+div[data-testid="stButton"] button span {
     color: #0B2D4D !important;
 }
 
-/* Refresh Now -> blu scuro */
+/* REFRESH NOW: BIANCO + BLUE SCURO */
 .st-key-global_refresh button {
-    background-color: #0B2D4D !important;
-    border-color: #0B2D4D !important;
-    color: white !important;
-    font-weight: 700 !important;
+    background-color: #FFFFFF !important;
+    color: #0B2D4D !important;
+    border: 1px solid #9FB6C8 !important;
 }
 
-.st-key-global_refresh button p {
-    color: white !important;
+.st-key-global_refresh button p,
+.st-key-global_refresh button span {
+    color: #0B2D4D !important;
 }
 
-/* Plotly range selector */
+/* METRIC CARD BIANCHE */
+div[data-testid="stMetric"] {
+    background-color: #FFFFFF !important;
+    border-radius: 8px !important;
+}
+
+/* TUTTO IL TESTO NELLE CARD BIANCHE */
+div[data-testid="stMetric"] *,
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label p,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+    color: #0B2D4D !important;
+}
+
+/* SIGNAL CHANGE: MOLTO PIÙ PICCOLO */
+.st-key-pe_signal_change [data-testid="stMetricValue"] {
+    font-size: 0.98rem !important;
+    line-height: 1.10 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+/* PLOTLY BUTTONS */
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
 .js-plotly-plot .rangeselector text {
     fill: #0B2D4D !important;
-    font-weight: 600 !important;
+    font-weight: 650 !important;
 }
 
-/* Metriche con testo lungo */
-.st-key-pe_signal_change [data-testid="stMetricValue"] {
-    font-size: 1.20rem !important;
+/* Download / toolbar buttons bianchi */
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
 }
 
-.st-key-pe_correlation_state [data-testid="stMetricValue"] {
-    font-size: 1.20rem !important;
-}
-
-.st-key-pe_decision_mode [data-testid="stMetricValue"] {
-    font-size: 1.20rem !important;
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: #0B2D4D !important;
 }
 
 </style>
@@ -5917,7 +5965,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 46.2 VISUAL DEV · Refinement 01
+    <div class="pe-release">Release 46.2 VISUAL DEV · Refinement 03
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6455,6 +6503,37 @@ def run_procureye_dashboard():
     )
 
     section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+    daily_market_brief = build_daily_market_brief(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        adaptive_news=adaptive_news,
+        confidence_engine=confidence_engine,
+        news=news,
+    )
+
+    render_daily_market_brief(
+        daily_market_brief
+    )
+
+    db1, db2, db3, db4 = st.columns(4)
+
+    with db1:
+        st.metric("Signal", signal)
+
+    with db2:
+        st.metric("Market Score", f"{score}/100")
+
+    with db3:
+        st.metric("Confidence", confidence)
+
+    with db4:
+        st.metric("Risk", risk)
+
     render_system_health(brent_df, wti_df, signal_news)
 
     render_market_delta(
@@ -6462,7 +6541,8 @@ def run_procureye_dashboard():
         wti,
         signal,
         score,
-        confidence
+        confidence,
+        risk
     )
 
 
@@ -6789,22 +6869,6 @@ def run_procureye_dashboard():
         confidence_engine
     )
 
-    daily_market_brief = build_daily_market_brief(
-        brent=brent,
-        wti=wti,
-        signal=signal,
-        score=score,
-        confidence=confidence,
-        risk=risk,
-        regime=regime,
-        adaptive_news=adaptive_news,
-        confidence_engine=confidence_engine,
-        news=news,
-    )
-
-    render_daily_market_brief(
-        daily_market_brief
-    )
 
     section("System State", "Release 39 operating status")
 
@@ -6817,11 +6881,7 @@ def run_procureye_dashboard():
         st.metric("Learning State", "ACTIVE")
 
     with s3:
-        pe_metric(
-            "pe_decision_mode",
-            "Decision Mode",
-            "SUPPORT ONLY"
-        )
+        st.metric("Decision Mode", "SUPPORT ONLY")
 
     with s4:
         st.metric("Human Oversight", "REQUIRED")
