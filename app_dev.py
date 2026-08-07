@@ -6513,7 +6513,7 @@ def run_procureye_dashboard():
         regime=regime,
         adaptive_news=adaptive_news,
         confidence_engine=confidence_engine,
-        news=news,
+        news=signal_news,
     )
 
     render_daily_market_brief(
