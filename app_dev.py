@@ -964,13 +964,15 @@ def render_market_delta(brent, wti, signal, score, confidence):
 
         with c3:
             if old_signal != current["signal"]:
-                st.metric(
+                pe_metric(
+                    "pe_signal_change",
                     "Signal Change",
                     _clean_signal(current["signal"]),
                     f"{_clean_signal(old_signal)} → {_clean_signal(current['signal'])}"
                 )
             else:
-                st.metric(
+                pe_metric(
+                    "pe_signal_change",
                     "Signal Change",
                     "UNCHANGED",
                     _clean_signal(current["signal"]),
@@ -1073,7 +1075,7 @@ def render_system_health(brent_df, wti_df, news_df):
     elif age_minutes <= 90:
         freshness_state = "STALE"
     else:
-        freshness_state = "FALLBACK"
+        freshness_state = "BACKUP DATA"
 
     st.markdown("### 🟢 System Health")
 
@@ -1136,7 +1138,7 @@ def render_system_health(brent_df, wti_df, news_df):
         if live_news:
             st.success("News sources: ONLINE")
         else:
-            st.warning("News sources: FALLBACK")
+            st.warning("News sources: BACKUP")
 
     st.caption(
         "Prices refresh every 5 minutes; "
@@ -2832,7 +2834,8 @@ def render_driver_correlation(report):
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        st.metric(
+        pe_metric(
+            "pe_correlation_state",
             "Correlation State",
             report.get("state", "UNKNOWN")
         )
@@ -5709,12 +5712,66 @@ def render_learning_statistics(report):
 
 # END PROCUREYE RELEASE 46.2 DEV
 
+
+def pe_metric(key, label, value, *args, **kwargs):
+    with st.container(key=key):
+        st.metric(label, value, *args, **kwargs)
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+st.markdown("""
+<style>
+
+/* Tutti i bottoni bianchi -> testo blu scuro */
+div[data-testid="stButton"] button {
+    color: #0B2D4D !important;
+    font-weight: 600 !important;
+}
+
+div[data-testid="stButton"] button p {
+    color: #0B2D4D !important;
+}
+
+/* Refresh Now -> blu scuro */
+.st-key-global_refresh button {
+    background-color: #0B2D4D !important;
+    border-color: #0B2D4D !important;
+    color: white !important;
+    font-weight: 700 !important;
+}
+
+.st-key-global_refresh button p {
+    color: white !important;
+}
+
+/* Plotly range selector */
+.js-plotly-plot .rangeselector text {
+    fill: #0B2D4D !important;
+    font-weight: 600 !important;
+}
+
+/* Metriche con testo lungo */
+.st-key-pe_signal_change [data-testid="stMetricValue"] {
+    font-size: 1.20rem !important;
+}
+
+.st-key-pe_correlation_state [data-testid="stMetricValue"] {
+    font-size: 1.20rem !important;
+}
+
+.st-key-pe_decision_mode [data-testid="stMetricValue"] {
+    font-size: 1.20rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
 
 
 import streamlit.components.v1 as components
@@ -5860,7 +5917,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 46.2 DEV · Learning Statistics
+    <div class="pe-release">Release 46.2 VISUAL DEV · Refinement 01
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6760,7 +6817,11 @@ def run_procureye_dashboard():
         st.metric("Learning State", "ACTIVE")
 
     with s3:
-        st.metric("Decision Mode", "SUPPORT ONLY")
+        pe_metric(
+            "pe_decision_mode",
+            "Decision Mode",
+            "SUPPORT ONLY"
+        )
 
     with s4:
         st.metric("Human Oversight", "REQUIRED")
