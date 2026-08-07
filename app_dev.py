@@ -4598,6 +4598,302 @@ def render_scenario_engine(report):
 
 # END PROCUREYE RELEASE 44.0 DEV
 
+
+# ============================================================
+# PROCUREYE RELEASE 45.0 DEV — DRIVER FORECAST ENGINE
+# ============================================================
+
+def build_driver_forecast(
+    ranking,
+    driver_report,
+    correlation_report,
+    predictive
+):
+    def num(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    empty = {
+        "forecast_driver": "NONE",
+        "direction": "NEUTRAL",
+        "probability": 0.0,
+        "current_driver": "NONE",
+        "horizon": "24-72h",
+        "drivers": pd.DataFrame()
+    }
+
+    if not isinstance(ranking, pd.DataFrame) or ranking.empty:
+        return empty
+
+    frame = ranking.copy()
+
+    defaults = {
+        "Driver": "OIL MARKET",
+        "Direction": "NEUTRAL",
+        "Ranking Score": 0,
+        "Confidence": 50
+    }
+
+    for col, default in defaults.items():
+        if col not in frame.columns:
+            frame[col] = default
+
+    frame["Ranking Score"] = pd.to_numeric(
+        frame["Ranking Score"],
+        errors="coerce"
+    ).fillna(0)
+
+    frame["Confidence"] = pd.to_numeric(
+        frame["Confidence"],
+        errors="coerce"
+    ).fillna(50)
+
+    frame["Direction"] = (
+        frame["Direction"]
+        .astype(str)
+        .str.upper()
+    )
+
+    frame["Forecast Weight"] = (
+        frame["Ranking Score"] * 0.65
+        + frame["Confidence"] * 0.35
+    )
+
+    grouped = (
+        frame.groupby(
+            ["Driver", "Direction"],
+            as_index=False
+        )
+        .agg(
+            Evidence=("Driver", "size"),
+            Forecast_Score=("Forecast Weight", "sum"),
+            Avg_Confidence=("Confidence", "mean")
+        )
+    )
+
+    current_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+        if isinstance(driver_report, dict)
+        else "NONE"
+    )
+
+    current_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(driver_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    correlation_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(correlation_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    alignment = num(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    prediction = str(
+        predictive.get(
+            "prediction",
+            "WAIT"
+        )
+        if isinstance(predictive, dict)
+        else "WAIT"
+    ).upper()
+
+    predictive_direction = {
+        "LONG": "BULLISH",
+        "SHORT": "BEARISH",
+        "WAIT": "NEUTRAL"
+    }.get(prediction, "NEUTRAL")
+
+    def bonus(row):
+        value = 0.0
+
+        if str(row["Driver"]) == current_driver:
+            value += 12.0
+
+        if str(row["Direction"]) == current_direction:
+            value += 6.0
+
+        if str(row["Direction"]) == correlation_direction:
+            value += alignment * 0.10
+
+        if str(row["Direction"]) == predictive_direction:
+            value += 8.0
+
+        return value
+
+    grouped["Context Bonus"] = grouped.apply(
+        bonus,
+        axis=1
+    )
+
+    grouped["Forecast Score"] = (
+        grouped["Forecast_Score"]
+        + grouped["Context Bonus"]
+    )
+
+    grouped = grouped.sort_values(
+        ["Forecast Score", "Evidence"],
+        ascending=False
+    ).reset_index(drop=True)
+
+    total = grouped["Forecast Score"].clip(
+        lower=0
+    ).sum()
+
+    if total > 0:
+        grouped["Probability"] = (
+            grouped["Forecast Score"]
+            .clip(lower=0)
+            / total
+            * 100
+        )
+    else:
+        grouped["Probability"] = 0.0
+
+    grouped["Probability"] = grouped[
+        "Probability"
+    ].round(1)
+
+    grouped["Avg Confidence"] = grouped[
+        "Avg_Confidence"
+    ].round(0).astype(int)
+
+    grouped = grouped.rename(
+        columns={
+            "Forecast_Score": "Raw Evidence Score"
+        }
+    )
+
+    leader = grouped.iloc[0]
+
+    return {
+        "forecast_driver":
+            str(leader["Driver"]),
+        "direction":
+            str(leader["Direction"]),
+        "probability":
+            float(leader["Probability"]),
+        "current_driver":
+            current_driver,
+        "horizon":
+            "24-72h",
+        "drivers":
+            grouped[
+                [
+                    "Driver",
+                    "Direction",
+                    "Probability",
+                    "Evidence",
+                    "Avg Confidence"
+                ]
+            ].head(8)
+    }
+
+
+def render_driver_forecast(report):
+
+    section(
+        "Driver Forecast",
+        "Most likely dominant market driver over the next 24-72 hours"
+    )
+
+    f1, f2, f3, f4 = st.columns(4)
+
+    with f1:
+        st.metric(
+            "Likely Next Driver",
+            report.get(
+                "forecast_driver",
+                "NONE"
+            )
+        )
+
+    with f2:
+        st.metric(
+            "Expected Direction",
+            report.get(
+                "direction",
+                "NEUTRAL"
+            )
+        )
+
+    with f3:
+        st.metric(
+            "Driver Probability",
+            f"{report.get('probability', 0):.1f}%"
+        )
+
+    with f4:
+        st.metric(
+            "Forecast Horizon",
+            report.get(
+                "horizon",
+                "24-72h"
+            )
+        )
+
+    drivers = report.get("drivers")
+
+    if isinstance(drivers, pd.DataFrame) and not drivers.empty:
+        st.dataframe(
+            drivers,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Probability":
+                    st.column_config.ProgressColumn(
+                        "Probability",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    ),
+                "Avg Confidence":
+                    st.column_config.ProgressColumn(
+                        "Avg Confidence",
+                        min_value=0,
+                        max_value=100,
+                        format="%d%%"
+                    )
+            }
+        )
+
+    st.info(
+        f"Current driver: "
+        f"{report.get('current_driver', 'NONE')} · "
+        f"Likely next dominant driver: "
+        f"{report.get('forecast_driver', 'NONE')}."
+    )
+
+    st.caption(
+        "Forecast recalculates at every refresh from current "
+        "market-moving news, ranking, driver strength, "
+        "correlation and Predictive Intelligence."
+    )
+
+# END PROCUREYE RELEASE 45.0 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -4749,7 +5045,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 44.0 DEV · Scenario Engine
+    <div class="pe-release">Release 45.0 DEV · Driver Forecast
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -5549,6 +5845,15 @@ def run_procureye_dashboard():
     render_scenario_engine(
         scenario_engine
     )
+
+    driver_forecast = build_driver_forecast(
+        ranking=market_movers_ranking,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        predictive=predictive_intelligence
+    )
+
+    render_driver_forecast(driver_forecast)
 
     record_decision_journal(
         brent=brent,
