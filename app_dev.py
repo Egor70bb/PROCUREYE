@@ -5107,6 +5107,269 @@ def record_prediction_archive(
 
 # END PROCUREYE RELEASE 46.0 DEV
 
+
+# ============================================================
+# PROCUREYE RELEASE 46.1 DEV — OUTCOME VALIDATION
+# ============================================================
+
+def validate_prediction_outcomes(
+    brent,
+    wti,
+    minimum_age_hours=24
+):
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    file = Path("/tmp/procureye_prediction_history.csv")
+
+    result = {
+        "validated_now": 0,
+        "total_validated": 0,
+        "total_predictions": 0,
+        "accuracy": 0.0,
+        "latest_result": "WAITING"
+    }
+
+    if not file.exists():
+        return result
+
+    try:
+        history = pd.read_csv(file)
+    except Exception:
+        return result
+
+    if history.empty:
+        return result
+
+    result["total_predictions"] = len(history)
+
+    required_columns = {
+        "outcome_validated": False,
+        "outcome_timestamp_utc": "",
+        "brent_return_pct": None,
+        "wti_return_pct": None,
+        "market_return_pct": None,
+        "realized_state": "",
+        "prediction_correct": None,
+        "brier_score": None
+    }
+
+    for col, default in required_columns.items():
+        if col not in history.columns:
+            history[col] = default
+
+    def num(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    current_brent = num(
+        brent.get("price")
+        if isinstance(brent, dict)
+        else None
+    )
+
+    current_wti = num(
+        wti.get("price")
+        if isinstance(wti, dict)
+        else None
+    )
+
+    if current_brent <= 0 or current_wti <= 0:
+        return result
+
+    now = datetime.now(timezone.utc)
+    validated_now = 0
+
+    for idx, row in history.iterrows():
+
+        already_validated = str(
+            row.get("outcome_validated", False)
+        ).lower() in {"true", "1", "yes"}
+
+        if already_validated:
+            continue
+
+        try:
+            created = pd.to_datetime(
+                row["timestamp_utc"],
+                utc=True
+            ).to_pydatetime()
+        except Exception:
+            continue
+
+        age_hours = (
+            now - created
+        ).total_seconds() / 3600
+
+        if age_hours < minimum_age_hours:
+            continue
+
+        entry_brent = num(row.get("brent"))
+        entry_wti = num(row.get("wti"))
+
+        if entry_brent <= 0 or entry_wti <= 0:
+            continue
+
+        brent_return = (
+            current_brent / entry_brent - 1
+        ) * 100
+
+        wti_return = (
+            current_wti / entry_wti - 1
+        ) * 100
+
+        market_return = (
+            brent_return + wti_return
+        ) / 2
+
+        # Zona neutrale ±0.75%
+        if market_return >= 0.75:
+            realized = "LONG"
+        elif market_return <= -0.75:
+            realized = "SHORT"
+        else:
+            realized = "WAIT"
+
+        prediction = str(
+            row.get("prediction", "WAIT")
+        ).upper()
+
+        correct = prediction == realized
+
+        long_p = num(
+            row.get("long_probability")
+        ) / 100
+
+        wait_p = num(
+            row.get("wait_probability")
+        ) / 100
+
+        short_p = num(
+            row.get("short_probability")
+        ) / 100
+
+        actual = {
+            "LONG": (1, 0, 0),
+            "WAIT": (0, 1, 0),
+            "SHORT": (0, 0, 1)
+        }.get(
+            realized,
+            (0, 1, 0)
+        )
+
+        brier = (
+            (long_p - actual[0]) ** 2
+            + (wait_p - actual[1]) ** 2
+            + (short_p - actual[2]) ** 2
+        ) / 3
+
+        history.at[idx, "outcome_validated"] = True
+        history.at[idx, "outcome_timestamp_utc"] = now.isoformat()
+        history.at[idx, "brent_return_pct"] = round(brent_return, 3)
+        history.at[idx, "wti_return_pct"] = round(wti_return, 3)
+        history.at[idx, "market_return_pct"] = round(market_return, 3)
+        history.at[idx, "realized_state"] = realized
+        history.at[idx, "prediction_correct"] = bool(correct)
+        history.at[idx, "brier_score"] = round(brier, 4)
+
+        validated_now += 1
+
+    history.to_csv(
+        file,
+        index=False
+    )
+
+    validated = history[
+        history["outcome_validated"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ]
+
+    result["validated_now"] = validated_now
+    result["total_validated"] = len(validated)
+
+    if not validated.empty:
+
+        correct_series = (
+            validated["prediction_correct"]
+            .astype(str)
+            .str.lower()
+            .isin(["true", "1", "yes"])
+        )
+
+        result["accuracy"] = round(
+            correct_series.mean() * 100,
+            1
+        )
+
+        last = validated.iloc[-1]
+
+        result["latest_result"] = (
+            f"{last.get('prediction', 'WAIT')} → "
+            f"{last.get('realized_state', 'WAIT')} · "
+            f"{'CORRECT' if str(last.get('prediction_correct')).lower() in ['true','1','yes'] else 'WRONG'}"
+        )
+
+    return result
+
+
+def render_outcome_validation(report):
+
+    section(
+        "Outcome Validation",
+        "Automatic comparison between previous predictions and realized market direction"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Predictions Stored",
+            int(report.get("total_predictions", 0))
+        )
+
+    with c2:
+        st.metric(
+            "Validated",
+            int(report.get("total_validated", 0))
+        )
+
+    with c3:
+        st.metric(
+            "Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+
+    with c4:
+        st.metric(
+            "Validated Now",
+            int(report.get("validated_now", 0))
+        )
+
+    if report.get("total_validated", 0) == 0:
+        st.info(
+            "Outcome validation is active. "
+            "The first prediction becomes eligible after 24 hours."
+        )
+    else:
+        st.info(
+            f"Latest validation: "
+            f"{report.get('latest_result', 'N/A')}"
+        )
+
+    st.caption(
+        "Realized state: LONG above +0.75%, "
+        "SHORT below -0.75%, otherwise WAIT, "
+        "using the average Brent/WTI return after at least 24 hours."
+    )
+
+# END PROCUREYE RELEASE 46.1 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -5258,7 +5521,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 46.0 DEV · Prediction Archive
+    <div class="pe-release">Release 46.1 DEV · Outcome Validation
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6081,6 +6344,14 @@ def run_procureye_dashboard():
         brent=brent,
         wti=wti
     )
+
+    outcome_validation = validate_prediction_outcomes(
+        brent=brent,
+        wti=wti,
+        minimum_age_hours=24
+    )
+
+    render_outcome_validation(outcome_validation)
 
     record_decision_journal(
         brent=brent,
