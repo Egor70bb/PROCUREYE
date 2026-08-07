@@ -964,13 +964,15 @@ def render_market_delta(brent, wti, signal, score, confidence):
 
         with c3:
             if old_signal != current["signal"]:
-                st.metric(
+                pe47_compact_metric(
+                    "pe47_signal_change",
                     "Signal Change",
                     _clean_signal(current["signal"]),
                     f"{_clean_signal(old_signal)} → {_clean_signal(current['signal'])}"
                 )
             else:
-                st.metric(
+                pe47_compact_metric(
+                    "pe47_signal_change",
                     "Signal Change",
                     "UNCHANGED",
                     _clean_signal(current["signal"]),
@@ -1216,9 +1218,9 @@ def render_executive_dashboard(
         )
 
     with c3:
-        st.metric(
+        pe47_status_metric(
             "Signal",
-            str(signal),
+            str(signal)
         )
 
     with c4:
@@ -1248,15 +1250,15 @@ def render_executive_dashboard(
         )
 
     with d2:
-        st.metric(
+        pe47_status_metric(
             "Brent Trend",
-            str(brent.get("trend", "UNKNOWN")),
+            str(brent.get("trend", "UNKNOWN"))
         )
 
     with d3:
-        st.metric(
+        pe47_status_metric(
             "WTI Trend",
-            str(wti.get("trend", "UNKNOWN")),
+            str(wti.get("trend", "UNKNOWN"))
         )
 
     with d4:
@@ -1488,9 +1490,7 @@ def render_decision_journal():
         )
 
     with j2:
-        st.metric(
-            "Latest Signal",
-            str(frame.iloc[0]["Signal"])
+        pe47_status_metric("Latest Signal", str(frame.iloc[0]["Signal"])
         )
 
     with j3:
@@ -1506,7 +1506,7 @@ def render_decision_journal():
         )
 
     st.dataframe(
-        frame.head(20),
+        pe47_semantic_df(frame.head(20)),
         width="stretch",
         hide_index=True
     )
@@ -1731,10 +1731,7 @@ def render_adaptive_news_weight(
         )
 
     with n4:
-        st.metric(
-            "News Direction",
-            adaptive_news["direction"]
-        )
+        pe47_status_metric("News Direction", adaptive_news["direction"])
 
     st.progress(
         int(
@@ -2086,28 +2083,70 @@ def build_daily_market_brief(
 
 
 def render_daily_market_brief(brief):
+
     section(
         "Daily Market Brief",
         "One-minute executive market summary"
     )
 
-    st.markdown(
-        f"""
-**Market structure**  
-{brief["structure"]}
-
-**Momentum**  
-{brief["momentum"]}
-
-**News intelligence**  
-{brief["news"]}
-
-**Decision**  
-{brief["decision"]}
-"""
+    structure = pe47_semantic_inline(
+        brief["structure"]
     )
 
-    st.info(brief["action"])
+    momentum = pe47_semantic_inline(
+        brief["momentum"]
+    )
+
+    news_text = pe47_semantic_inline(
+        brief["news"]
+    )
+
+    decision = pe47_semantic_inline(
+        brief["decision"]
+    )
+
+    html_block = (
+        '<div class="pe47-brief">'
+        
+        '<div class="pe47-brief-title">'
+        'Market structure'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + structure +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'Momentum'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + momentum +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'News intelligence'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + news_text +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'Decision'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + decision +
+        '</div>'
+
+        '</div>'
+    )
+
+    st.markdown(
+        html_block,
+        unsafe_allow_html=True
+    )
+
+    st.info(
+        brief["action"]
+    )
 
 
 
@@ -2126,7 +2165,7 @@ def render_driver_intelligence_panel(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2150,7 +2189,7 @@ def render_driver_intelligence_panel(report):
         and not drivers.empty
     ):
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -2385,7 +2424,7 @@ def render_driver_intelligence_panel(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2406,7 +2445,7 @@ def render_driver_intelligence_panel(report):
 
     if isinstance(drivers, pd.DataFrame) and not drivers.empty:
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -2572,7 +2611,7 @@ def render_market_movers_ranking(ranking):
         )
 
     with r2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             str(leader["Direction"])
         )
@@ -2590,7 +2629,7 @@ def render_market_movers_ranking(ranking):
         )
 
     st.dataframe(
-        ranking,
+        pe47_semantic_df(ranking),
         width="stretch",
         hide_index=True,
         column_config={
@@ -2832,13 +2871,14 @@ def render_driver_correlation(report):
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        st.metric(
+        pe47_compact_metric(
+            "pe47_correlation_state",
             "Correlation State",
             report.get("state", "UNKNOWN")
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Combined Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2859,7 +2899,7 @@ def render_driver_correlation(report):
 
     if isinstance(details, pd.DataFrame) and not details.empty:
         st.dataframe(
-            details,
+            pe47_semantic_df(details),
             width="stretch",
             hide_index=True,
             column_config={
@@ -3207,7 +3247,7 @@ def render_historical_driver_memory(memory):
         )
 
     with m3:
-        st.metric(
+        pe47_status_metric(
             "Latest Direction",
             memory.get(
                 "latest_direction",
@@ -3237,7 +3277,7 @@ def render_historical_driver_memory(memory):
             "Recent driver-memory observations"
         ):
             st.dataframe(
-                history.head(25),
+                pe47_semantic_df(history.head(25)),
                 width="stretch",
                 hide_index=True
             )
@@ -3982,7 +4022,7 @@ def render_explainable_decision_v2(report):
     x1, x2, x3, x4 = st.columns(4)
 
     with x1:
-        st.metric(
+        pe47_status_metric(
             "Decision",
             report.get("signal", "WAIT")
         )
@@ -4025,7 +4065,7 @@ def render_explainable_decision_v2(report):
         st.markdown("#### Decision evidence")
 
         st.dataframe(
-            evidence,
+            pe47_semantic_df(evidence),
             width="stretch",
             hide_index=True,
             column_config={
@@ -4226,7 +4266,10 @@ def render_predictive_intelligence(report):
     a, b, c, d = st.columns(4)
 
     with a:
-        st.metric("Prediction", report["prediction"])
+        pe47_status_metric(
+            "Prediction",
+            report["prediction"]
+        )
 
     with b:
         st.metric(
@@ -4244,7 +4287,7 @@ def render_predictive_intelligence(report):
         )
 
     st.dataframe(
-        report["table"],
+        pe47_semantic_df(report["table"]),
         width="stretch",
         hide_index=True,
         column_config={
@@ -4529,7 +4572,7 @@ def render_scenario_engine(report):
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        st.metric(
+        pe47_status_metric(
             "Leading Scenario",
             report.get(
                 "leading_scenario",
@@ -4538,7 +4581,7 @@ def render_scenario_engine(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Expected Signal",
             report.get(
                 "leading_signal",
@@ -4568,7 +4611,7 @@ def render_scenario_engine(report):
     ):
 
         st.dataframe(
-            scenarios,
+            pe47_semantic_df(scenarios),
             width="stretch",
             hide_index=True,
             column_config={
@@ -4831,7 +4874,7 @@ def render_driver_forecast(report):
         )
 
     with f2:
-        st.metric(
+        pe47_status_metric(
             "Expected Direction",
             report.get(
                 "direction",
@@ -4858,7 +4901,7 @@ def render_driver_forecast(report):
 
     if isinstance(drivers, pd.DataFrame) and not drivers.empty:
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -5636,7 +5679,7 @@ def render_learning_statistics(report):
         st.markdown("#### Accuracy by Signal")
 
         st.dataframe(
-            by_signal,
+            pe47_semantic_df(by_signal),
             width="stretch",
             hide_index=True,
             column_config={
@@ -5678,7 +5721,7 @@ def render_learning_statistics(report):
         st.markdown("#### Accuracy by Scenario")
 
         st.dataframe(
-            by_scenario,
+            pe47_semantic_df(by_scenario),
             width="stretch",
             hide_index=True
         )
@@ -5708,6 +5751,309 @@ def render_learning_statistics(report):
     )
 
 # END PROCUREYE RELEASE 46.2 DEV
+
+
+# ============================================================
+# RELEASE 47.0 — CENTRAL VISUAL SYSTEM
+# ============================================================
+
+# Release 47.1 KEY FIX
+# Conserva una sola volta la vera funzione Streamlit.
+if not hasattr(st, "_procureye_native_metric"):
+    st._procureye_native_metric = st.metric
+
+_pe_original_metric = st._procureye_native_metric
+_pe_metric_counter = 0
+
+
+def _pe_clean_state(value):
+
+    return (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+
+def _pe_visual_metric(
+    label,
+    value,
+    *args,
+    **kwargs
+):
+
+    global _pe_metric_counter
+
+    state = _pe_clean_state(value)
+
+    semantic = None
+
+    if state in ("LONG", "BULLISH"):
+        semantic = "bull"
+
+    elif state in ("SHORT", "BEARISH"):
+        semantic = "bear"
+
+    elif state in ("WAIT", "NEUTRAL"):
+        semantic = "neutral"
+
+    if semantic is None:
+        return _pe_original_metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+    _pe_metric_counter += 1
+
+    with st.container(
+        key=f"pe47_{semantic}_{_pe_metric_counter}"
+    ):
+        return _pe_original_metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+
+# PROCUREYE 47.1: st.metric native preserved
+def pe47_compact_metric(
+    key,
+    label,
+    value,
+    *args,
+    **kwargs
+):
+    # key mantenuta solo come container visuale
+    with st.container(key=key):
+        return st.metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+
+
+# PROCUREYE 47.2 SEMANTIC HELPER START
+
+def _pe47_clean_state(value):
+    return (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+
+def _pe47_semantic_class(value):
+
+    clean = _pe47_clean_state(value)
+
+    if clean in (
+        "LONG",
+        "BULLISH",
+        "BULL"
+    ):
+        return "pe47-bull"
+
+    if clean in (
+        "SHORT",
+        "BEARISH",
+        "BEAR"
+    ):
+        return "pe47-bear"
+
+    if clean in (
+        "WAIT",
+        "NEUTRAL",
+        "BASE"
+    ):
+        return "pe47-neutral"
+
+    return "pe47-standard"
+
+
+def pe47_status_metric(
+    label,
+    value,
+    delta=None
+):
+    import html
+
+    clean = _pe47_clean_state(value)
+    css_class = _pe47_semantic_class(clean)
+
+    delta_html = ""
+
+    if delta is not None:
+        delta_html = (
+            '<div class="pe47-status-delta">'
+            + html.escape(str(delta))
+            + '</div>'
+        )
+
+    html_block = (
+        '<div class="pe47-status-card">'
+        '<div class="pe47-status-label">'
+        + html.escape(str(label))
+        + '</div>'
+        '<div class="pe47-status-value '
+        + css_class
+        + '">'
+        + html.escape(clean)
+        + '</div>'
+        + delta_html
+        + '</div>'
+    )
+
+    st.markdown(
+        html_block,
+        unsafe_allow_html=True
+    )
+
+
+
+def pe47_semantic_inline(value):
+
+    import html
+    import re
+
+    text = html.escape(str(value))
+
+    patterns = [
+        (
+            r"\b(LONG|BULLISH|BULL)\b",
+            "pe47-bull"
+        ),
+        (
+            r"\b(SHORT|BEARISH|BEAR)\b",
+            "pe47-bear"
+        ),
+        (
+            r"\b(WAIT|NEUTRAL|BASE)\b",
+            "pe47-neutral"
+        )
+    ]
+
+    for pattern, css_class in patterns:
+
+        text = re.sub(
+            pattern,
+            lambda m:
+                f'<span class="{css_class}">'
+                f'{m.group(0)}</span>',
+            text,
+            flags=re.IGNORECASE
+        )
+
+    return text
+
+
+def pe47_semantic_df(frame):
+
+    if frame is None:
+        return frame
+
+    def semantic_style(value):
+
+        clean = _pe47_clean_state(value)
+
+        if clean in (
+            "LONG",
+            "BULLISH",
+            "BULL"
+        ):
+            return (
+                "color:#22C55E;"
+                "font-weight:700;"
+            )
+
+        if clean in (
+            "SHORT",
+            "BEARISH",
+            "BEAR"
+        ):
+            return (
+                "color:#EF4444;"
+                "font-weight:700;"
+            )
+
+        if clean in (
+            "WAIT",
+            "NEUTRAL",
+            "BASE"
+        ):
+            return (
+                "color:#FACC15;"
+                "font-weight:700;"
+            )
+
+        return ""
+
+    styler = frame.style
+
+    try:
+        return styler.map(
+            semantic_style
+        )
+    except AttributeError:
+        return styler.applymap(
+            semantic_style
+        )
+
+# PROCUREYE 47.2 SEMANTIC HELPER END
+
+
+# PROCUREYE RELEASE 47.6 QUICK NAV START
+
+def pe47_anchor(anchor_id):
+    st.markdown(
+        f'<div id="{anchor_id}" class="pe47-anchor"></div>',
+        unsafe_allow_html=True
+    )
+
+
+def pe47_quick_navigation():
+
+    items = [
+        ("Brief", "brief"),
+        ("Health", "health"),
+        ("Market", "market"),
+        ("Signal", "signal-analysis"),
+        ("News", "news"),
+        ("Drivers", "drivers"),
+        ("Explain", "explain"),
+        ("Predictive", "predictive"),
+        ("Scenarios", "scenarios"),
+        ("Learning", "learning"),
+        ("Journal", "journal"),
+        ("System", "system"),
+    ]
+
+    links = "".join(
+        f'<a class="pe47-nav-button" href="#{anchor}">{label}</a>'
+        for label, anchor in items
+    )
+
+    st.markdown(
+        '<div class="pe47-nav-wrap">'
+        '<div class="pe47-nav-title">QUICK NAVIGATION</div>'
+        '<div class="pe47-nav-grid">'
+        + links +
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+# END PROCUREYE RELEASE 47.6 QUICK NAV
 
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
@@ -5860,7 +6206,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 46.2 · Learning Statistics
+    <div class="pe-release">Release 47.6.3 · Production
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6397,8 +6743,66 @@ def run_procureye_dashboard():
         adaptive_news=adaptive_news
     )
 
-    section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+    pe47_anchor("procureye-top")
+
+    st.markdown(
+        '<div class="pe47-executive-header">'
+        '<div class="pe47-executive-title">EXECUTIVE DASHBOARD</div>'
+        '<div class="pe47-executive-update">'
+        + datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC")
+        + '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+    daily_market_brief = build_daily_market_brief(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        adaptive_news=adaptive_news,
+        confidence_engine=confidence_engine,
+        news=signal_news,
+    )
+
+    pe47_anchor("brief")
+
+    render_daily_market_brief(
+        daily_market_brief
+    )
+
+    q1, q2, q3, q4 = st.columns(4)
+
+    with q1:
+        pe47_status_metric("Signal", signal)
+
+    with q2:
+        st.metric(
+            "Market Score",
+            f"{score}/100"
+        )
+
+    with q3:
+        st.metric(
+            "Confidence",
+            confidence
+        )
+
+    with q4:
+        st.metric(
+            "Risk",
+            risk
+        )
+
+    pe47_quick_navigation()
+
+    pe47_anchor("health")
+
     render_system_health(brent_df, wti_df, signal_news)
+
+    pe47_anchor("last-refresh")
 
     render_market_delta(
         brent,
@@ -6427,7 +6831,7 @@ def run_procureye_dashboard():
         )
 
     with c3:
-        st.metric("Signal", signal)
+        pe47_status_metric("Signal", signal)
 
     with c4:
         st.metric("Market Score", f"{score}/100")
@@ -6437,6 +6841,8 @@ def run_procureye_dashboard():
 
     with c6:
         st.metric("Risk", risk)
+
+    pe47_anchor("market")
 
     section("Market Intelligence", "Brent and WTI interactive history")
 
@@ -6448,6 +6854,8 @@ def run_procureye_dashboard():
     with right:
         render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
 
+
+    pe47_anchor("signal-analysis")
 
     section("Why This Signal?", "Automatic explainable decision summary")
 
@@ -6482,6 +6890,8 @@ def run_procureye_dashboard():
     with w3:
         st.metric("Market Regime", why["regime"])
 
+
+    pe47_anchor("news")
 
     section(
         "Top Market-Moving News",
@@ -6518,7 +6928,7 @@ def run_procureye_dashboard():
                 )
 
             with n2:
-                st.metric(
+                pe47_status_metric(
                     "Expected impact",
                     row["Bias"],
                     f"{row['Impact']:+.1f}"
@@ -6537,6 +6947,8 @@ def run_procureye_dashboard():
                     use_container_width=False
                 )
 
+
+    pe47_anchor("drivers")
 
     section("Market Drivers", "Current directional evidence")
 
@@ -6598,6 +7010,8 @@ def run_procureye_dashboard():
 
     historical_driver_memory = build_historical_driver_memory()
 
+    pe47_anchor("learning")
+
     render_historical_driver_memory(
         historical_driver_memory
     )
@@ -6630,6 +7044,8 @@ def run_procureye_dashboard():
         ranking=market_movers_ranking
     )
 
+    pe47_anchor("explain")
+
     render_explainable_decision_v2(
         explainable_decision_v2
     )
@@ -6646,7 +7062,11 @@ def run_procureye_dashboard():
         confidence_v2=confidence_intelligence_v2
     )
 
-    render_predictive_intelligence(predictive_intelligence)
+    pe47_anchor("predictive")
+
+    render_predictive_intelligence(
+        predictive_intelligence
+    )
 
     scenario_engine = build_scenario_engine(
         predictive=predictive_intelligence,
@@ -6656,6 +7076,8 @@ def run_procureye_dashboard():
         correlation_report=driver_correlation,
         risk=risk
     )
+
+    pe47_anchor("scenarios")
 
     render_scenario_engine(
         scenario_engine
@@ -6718,6 +7140,8 @@ def run_procureye_dashboard():
     )
 
 
+    pe47_anchor("journal")
+
     section(
         "Decision Journal",
         "Recorded market decisions and changes"
@@ -6728,26 +7152,12 @@ def run_procureye_dashboard():
 
 
 
+    pe47_anchor("system")
+
     render_confidence_engine(
         confidence_engine
     )
 
-    daily_market_brief = build_daily_market_brief(
-        brent=brent,
-        wti=wti,
-        signal=signal,
-        score=score,
-        confidence=confidence,
-        risk=risk,
-        regime=regime,
-        adaptive_news=adaptive_news,
-        confidence_engine=confidence_engine,
-        news=news,
-    )
-
-    render_daily_market_brief(
-        daily_market_brief
-    )
 
     section("System State", "Release 39 operating status")
 
@@ -6760,7 +7170,11 @@ def run_procureye_dashboard():
         st.metric("Learning State", "ACTIVE")
 
     with s3:
-        st.metric("Decision Mode", "SUPPORT ONLY")
+        pe47_compact_metric(
+            "pe47_decision_mode",
+            "Decision Mode",
+            "SUPPORT ONLY"
+        )
 
     with s4:
         st.metric("Human Oversight", "REQUIRED")
@@ -6770,6 +7184,1515 @@ def run_procureye_dashboard():
         "All outputs are decision-support information only."
     )
 
+
+
+# ============================================================
+# PROCUREYE RELEASE 47.0 — PROFESSIONAL UI
+# ============================================================
+
+st.markdown("""
+<style>
+
+/* --------------------------------------------
+   BASE
+   -------------------------------------------- */
+
+:root {
+    --pe-navy: #0B2D4D;
+    --pe-blue: #123B5D;
+    --pe-border: #AFC2D2;
+    --pe-white: #FFFFFF;
+
+    --pe-green: #22C55E;
+    --pe-red: #EF4444;
+    --pe-yellow: #FACC15;
+}
+
+
+/* --------------------------------------------
+   METRIC CARDS
+   Blu come Release 46 + testo bianco
+   -------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    color: var(--pe-white) !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"],
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* --------------------------------------------
+   COLORI SEMANTICI
+   -------------------------------------------- */
+
+/* LONG / BULLISH */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-green) !important;
+}
+
+
+/* SHORT / BEARISH */
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-red) !important;
+}
+
+
+/* WAIT / NEUTRAL */
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-yellow) !important;
+}
+
+
+/* Le label restano bianche */
+[class*="st-key-pe47_"]
+[data-testid="stMetricLabel"],
+[class*="st-key-pe47_"]
+[data-testid="stMetricLabel"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* --------------------------------------------
+   BOTTONI
+   SOLO bianchi + scritte blue scuro
+   -------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background: var(--pe-white) !important;
+
+    color: var(--pe-navy) !important;
+
+    border: 1px solid
+        var(--pe-border) !important;
+
+    box-shadow: none !important;
+
+    font-weight: 600 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+
+    background:
+        var(--pe-white) !important;
+
+    color:
+        var(--pe-navy) !important;
+}
+
+
+/* --------------------------------------------
+   SIGNAL CHANGE
+   -------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: 0.82rem !important;
+
+    line-height: 1.05 !important;
+
+    white-space: normal !important;
+
+    overflow-wrap: anywhere !important;
+}
+
+
+/* Correlation State */
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"] {
+
+    font-size: 1.00rem !important;
+}
+
+
+/* Decision Mode */
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: 1.00rem !important;
+}
+
+
+/* --------------------------------------------
+   PLOTLY RANGE BUTTONS
+   -------------------------------------------- */
+
+.js-plotly-plot
+.rangeselector rect {
+
+    fill:
+        var(--pe-white) !important;
+}
+
+.js-plotly-plot
+.rangeselector text {
+
+    fill:
+        var(--pe-navy) !important;
+
+    font-weight: 600 !important;
+}
+
+
+/* --------------------------------------------
+   Spacing uniforme
+   -------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding-top: 0.15rem;
+    padding-bottom: 0.15rem;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+
+# PROCUREYE RELEASE 47.1 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.1 — LAYOUT REFINEMENT
+   ========================================================== */
+
+:root {
+    --pe47-navy: #0B2D4D;
+    --pe47-white: #FFFFFF;
+    --pe47-green: #22C55E;
+    --pe47-red: #EF4444;
+    --pe47-yellow: #FACC15;
+    --pe47-border: rgba(190, 210, 225, .28);
+}
+
+
+/* ----------------------------------------------------------
+   SEZIONI — PIÙ ARIA, GERARCHIA PIÙ PULITA
+   ---------------------------------------------------------- */
+
+h2 {
+    margin-top: 1.65rem !important;
+    margin-bottom: 0.35rem !important;
+}
+
+h3 {
+    margin-top: 1.25rem !important;
+    margin-bottom: 0.30rem !important;
+}
+
+[data-testid="stCaptionContainer"] {
+    margin-bottom: 0.45rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRIC CARD
+   Card blu -> testo bianco
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding-top: 0.28rem !important;
+    padding-bottom: 0.28rem !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: var(--pe47-white) !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLORI SEMANTICI — PRIORITÀ MASSIMA
+   ---------------------------------------------------------- */
+
+/* LONG / BULLISH -> VERDE */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-green) !important;
+}
+
+
+/* SHORT / BEARISH -> ROSSO */
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-red) !important;
+}
+
+
+/* WAIT / NEUTRAL -> GIALLO */
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-yellow) !important;
+}
+
+
+/* Label delle metriche semantiche sempre bianche */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricLabel"] * {
+    color: var(--pe47-white) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE — PIÙ PICCOLO
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: 0.76rem !important;
+    line-height: 1.0 !important;
+
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION STATE / DECISION MODE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: 0.95rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI BIANCHI -> TESTO BLU SCURO
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: var(--pe47-white) !important;
+    color: var(--pe47-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    font-weight: 600 !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe47-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+
+    background-color: var(--pe47-white) !important;
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: var(--pe47-white) !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe47-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TABELLE — PIÙ COMPATTE
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    margin-top: 0.25rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   INFO / WARNING — RIDUCE RUMORE VISIVO
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    margin-top: 0.35rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   SPAZIATURA COLONNE
+   ---------------------------------------------------------- */
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.75rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.1 VISUAL
+
+
+# PROCUREYE 47.2 STYLE START
+
+st.markdown("""
+<style>
+
+/* ==============================================
+   CARD BLU: TESTO SEMPRE BIANCO
+   ============================================== */
+
+div[data-testid="stMetric"],
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: #FFFFFF !important;
+}
+
+
+/* ==============================================
+   STATUS CARD
+   ============================================== */
+
+.pe47-status-card {
+    background: #123B5D;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+    min-height: 82px;
+}
+
+.pe47-status-label {
+    color: #FFFFFF !important;
+    font-size: 0.82rem;
+    margin-bottom: 0.22rem;
+}
+
+.pe47-status-value {
+    font-size: 1.45rem;
+    font-weight: 600;
+}
+
+
+/* LONG / BULLISH */
+.pe47-bull {
+    color: #22C55E !important;
+}
+
+
+/* SHORT / BEARISH */
+.pe47-bear {
+    color: #EF4444 !important;
+}
+
+
+/* WAIT / NEUTRAL */
+.pe47-neutral {
+    color: #FACC15 !important;
+}
+
+
+/* Altri stati */
+.pe47-standard {
+    color: #FFFFFF !important;
+}
+
+
+/* ==============================================
+   BOTTONI BIANCHI
+   ============================================== */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+    border-color: #B8C9D6 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: #0B2D4D !important;
+}
+
+
+/* Refresh */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+}
+
+
+/* Plotly */
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: #0B2D4D !important;
+}
+
+
+/* Signal Change */
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+    font-size: 0.76rem !important;
+    line-height: 1.0 !important;
+    white-space: normal !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# PROCUREYE 47.2 STYLE END
+
+
+
+# PROCUREYE RELEASE 47.3 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.3 — VISUAL POLISH
+   ========================================================== */
+
+:root {
+    --pe-navy: #0B2D4D;
+    --pe-white: #FFFFFF;
+    --pe-green: #22C55E;
+    --pe-red: #EF4444;
+    --pe-yellow: #FACC15;
+    --pe-border: rgba(185,205,220,.26);
+}
+
+
+/* ----------------------------------------------------------
+   PAGINA
+   ---------------------------------------------------------- */
+
+.block-container {
+    padding-top: 1.25rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1500px !important;
+}
+
+
+/* ----------------------------------------------------------
+   TITOLI
+   ---------------------------------------------------------- */
+
+h1 {
+    margin-bottom: 0.20rem !important;
+}
+
+h2 {
+    margin-top: 1.55rem !important;
+    margin-bottom: 0.20rem !important;
+}
+
+h3 {
+    margin-top: 1.15rem !important;
+    margin-bottom: 0.18rem !important;
+}
+
+
+/* Subtitle / caption */
+[data-testid="stCaptionContainer"] {
+    margin-top: 0 !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLONNE
+   ---------------------------------------------------------- */
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.70rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRIC CARD
+   mantiene stile blu + testo bianco
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding: 0.38rem 0.15rem !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"],
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* Valori leggermente più compatti */
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] {
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   STATUS CARD 47.2
+   ---------------------------------------------------------- */
+
+.pe47-status-card {
+    min-height: 78px !important;
+    padding: 0.50rem 0.70rem !important;
+}
+
+.pe47-status-label {
+    font-size: 0.80rem !important;
+}
+
+.pe47-status-value {
+    font-size: 1.32rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* SEMANTICI */
+.pe47-bull {
+    color: var(--pe-green) !important;
+}
+
+.pe47-bear {
+    color: var(--pe-red) !important;
+}
+
+.pe47-neutral {
+    color: var(--pe-yellow) !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background: var(--pe-white) !important;
+    color: var(--pe-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    font-weight: 600 !important;
+
+    box-shadow: none !important;
+
+    min-height: 2.35rem !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: var(--pe-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background: var(--pe-white) !important;
+    color: var(--pe-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+    font-size: 0.72rem !important;
+    line-height: 1.0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION / DECISION
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+    font-size: 0.92rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   ALERT / INFO BOX
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    margin-top: 0.30rem !important;
+    margin-bottom: 0.60rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   DATAFRAME
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    margin-top: 0.20rem !important;
+    margin-bottom: 0.65rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   EXPANDER
+   ---------------------------------------------------------- */
+
+[data-testid="stExpander"] {
+    margin-top: 0.30rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   PLOTLY
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: var(--pe-white) !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   MOBILE / TABLET
+   ---------------------------------------------------------- */
+
+@media (max-width: 900px) {
+
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+
+    .pe47-status-value {
+        font-size: 1.12rem !important;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.3 VISUAL
+
+
+
+# PROCUREYE RELEASE 47.4 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.4 — EXECUTIVE READABILITY
+   ========================================================== */
+
+:root {
+    --pe47-navy: #0B2D4D;
+    --pe47-white: #FFFFFF;
+    --pe47-green: #22C55E;
+    --pe47-red: #EF4444;
+    --pe47-yellow: #FACC15;
+}
+
+
+/* ----------------------------------------------------------
+   HEADER
+   ---------------------------------------------------------- */
+
+.pe-brand {
+    letter-spacing: .055em !important;
+}
+
+.pe-title {
+    margin-top: .20rem !important;
+    margin-bottom: .30rem !important;
+}
+
+.pe-copy {
+    max-width: 1100px !important;
+    line-height: 1.45 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TITOLI SEZIONE
+   più netti e meno "ammassati"
+   ---------------------------------------------------------- */
+
+h2 {
+    padding-top: .20rem !important;
+    margin-top: 1.65rem !important;
+}
+
+h3 {
+    margin-top: 1.20rem !important;
+}
+
+h2 + div,
+h3 + div {
+    margin-top: .15rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRICHE
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    min-height: 82px !important;
+}
+
+div[data-testid="stMetric"]
+[data-testid="stMetricLabel"] {
+    font-size: .78rem !important;
+}
+
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] {
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   STATUS COLORS 47.2
+   ---------------------------------------------------------- */
+
+.pe47-bull {
+    color: var(--pe47-green) !important;
+}
+
+.pe47-bear {
+    color: var(--pe47-red) !important;
+}
+
+.pe47-neutral {
+    color: var(--pe47-yellow) !important;
+}
+
+
+/* ----------------------------------------------------------
+   DAILY MARKET BRIEF
+   ---------------------------------------------------------- */
+
+[data-testid="stMarkdownContainer"] strong {
+    font-weight: 650;
+}
+
+
+/* ----------------------------------------------------------
+   INFO / WARNING BOX
+   meno invasivi
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    border-radius: 8px !important;
+}
+
+[data-testid="stAlert"] p {
+    line-height: 1.38 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TABELLE
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI
+   bianchi / testo blu scuro
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: #FFFFFF !important;
+    color: var(--pe47-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   REFRESH
+   ---------------------------------------------------------- */
+
+.st-key-global_refresh button {
+    background: #FFFFFF !important;
+    color: var(--pe47-navy) !important;
+}
+
+.st-key-global_refresh button * {
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: .70rem !important;
+    line-height: 1 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION / DECISION MODE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: .90rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe47-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   SEPARAZIONE VISIVA TRA BLOCCHI
+   ---------------------------------------------------------- */
+
+hr {
+    border-color: rgba(170,195,212,.20) !important;
+}
+
+
+/* ----------------------------------------------------------
+   MOBILE
+   ---------------------------------------------------------- */
+
+@media (max-width: 768px) {
+
+    div[data-testid="stMetric"] {
+        min-height: 70px !important;
+    }
+
+    .pe47-status-value {
+        font-size: 1rem !important;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.4 VISUAL
+
+
+# PROCUREYE RELEASE 47.5 VISUAL START
+
+st.markdown("""
+<style>
+
+/* Semantic values */
+.pe47-bull {
+    color:#22C55E !important;
+    font-weight:700 !important;
+}
+
+.pe47-bear {
+    color:#EF4444 !important;
+    font-weight:700 !important;
+}
+
+.pe47-neutral {
+    color:#FACC15 !important;
+    font-weight:700 !important;
+}
+
+/* Status card */
+.pe47-status-card {
+    background:#123B5D !important;
+    border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:8px !important;
+    padding:.50rem .70rem !important;
+    min-height:78px !important;
+}
+
+.pe47-status-label {
+    color:#FFFFFF !important;
+    font-size:.80rem !important;
+}
+
+.pe47-status-delta {
+    color:#FFFFFF !important;
+    font-size:.78rem !important;
+    margin-top:.15rem !important;
+}
+
+/* Tutto ciò che non è semantico nelle card scure resta bianco */
+.pe47-standard {
+    color:#FFFFFF !important;
+}
+
+/* Bottoni bianchi -> blue scuro */
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background:#FFFFFF !important;
+    color:#0B2D4D !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color:#0B2D4D !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.5 VISUAL
+
+
+# PROCUREYE RELEASE 47.5.1 STYLE START
+
+st.markdown("""
+<style>
+
+.pe47-brief-title {
+    color:#FFFFFF !important;
+    font-weight:700 !important;
+    margin-top:.70rem !important;
+    margin-bottom:.12rem !important;
+}
+
+.pe47-brief-text {
+    color:#E8F1F6 !important;
+    line-height:1.45 !important;
+}
+
+/* LONG / BULLISH / BULL */
+.pe47-bull {
+    color:#22C55E !important;
+    font-weight:700 !important;
+}
+
+/* SHORT / BEARISH / BEAR */
+.pe47-bear {
+    color:#EF4444 !important;
+    font-weight:700 !important;
+}
+
+/* WAIT / NEUTRAL / BASE */
+.pe47-neutral {
+    color:#FACC15 !important;
+    font-weight:700 !important;
+}
+
+/* status card */
+.pe47-status-card {
+    background:#123B5D !important;
+    border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:8px !important;
+    padding:.50rem .70rem !important;
+    min-height:78px !important;
+}
+
+.pe47-status-label {
+    color:#FFFFFF !important;
+    font-size:.80rem !important;
+}
+
+.pe47-status-delta {
+    color:#FFFFFF !important;
+    font-size:.78rem !important;
+    margin-top:.15rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.5.1 STYLE
+
+
+# PROCUREYE RELEASE 47.6 QUICK NAV STYLE START
+
+st.markdown("""
+<style>
+
+/* Anchor compensation for Streamlit header */
+.pe47-anchor {
+    scroll-margin-top: 90px;
+    height: 1px;
+}
+
+/* Navigation container */
+.pe47-nav-wrap {
+    margin-top: 1rem;
+    margin-bottom: 1.25rem;
+    padding: .8rem .9rem;
+    border: 1px solid rgba(175,194,210,.22);
+    border-radius: 10px;
+    background: rgba(14,28,39,.50);
+}
+
+.pe47-nav-title {
+    color: #91A8B7;
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .10em;
+    margin-bottom: .55rem;
+}
+
+/* Responsive navigation */
+.pe47-nav-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .48rem;
+}
+
+/* White buttons / dark blue text */
+.pe47-nav-button,
+.pe47-nav-button:link,
+.pe47-nav-button:visited {
+    display: inline-block;
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6;
+    border-radius: 7px;
+
+    padding: .43rem .70rem;
+
+    font-size: .78rem;
+    font-weight: 650;
+    line-height: 1.1;
+
+    text-decoration: none !important;
+
+    transition:
+        transform .10s ease,
+        border-color .10s ease;
+}
+
+.pe47-nav-button:hover {
+    color: #0B2D4D !important;
+    border-color: #35A8D4;
+    transform: translateY(-1px);
+    text-decoration: none !important;
+}
+
+.pe47-nav-button:active {
+    transform: translateY(0);
+}
+
+/* Mobile */
+@media (max-width: 760px) {
+
+    .pe47-nav-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .pe47-nav-button {
+        text-align: center;
+        padding: .48rem .35rem;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6 QUICK NAV STYLE
+
+
+
+
+
+# PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE START
+
+st.markdown("""
+<style>
+
+/* Floating Back-to-Top button */
+
+.pe47-back-top,
+.pe47-back-top:link,
+.pe47-back-top:visited {
+
+    position: fixed;
+
+    right: 24px;
+    bottom: 24px;
+
+    width: 46px;
+    height: 46px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6;
+    border-radius: 50%;
+
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1;
+
+    text-decoration: none !important;
+
+    box-shadow:
+        0 4px 14px rgba(0,0,0,.22);
+
+    z-index: 999999;
+
+    transition:
+        transform .12s ease,
+        box-shadow .12s ease,
+        border-color .12s ease;
+}
+
+.pe47-back-top:hover {
+
+    color: #0B2D4D !important;
+
+    border-color: #35A8D4;
+
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 6px 18px rgba(0,0,0,.28);
+
+    text-decoration: none !important;
+}
+
+.pe47-back-top:active {
+    transform: translateY(0);
+}
+
+
+/* Mobile */
+
+@media (max-width: 760px) {
+
+    .pe47-back-top {
+
+        right: 14px;
+        bottom: 18px;
+
+        width: 42px;
+        height: 42px;
+
+        font-size: 1.25rem;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE
+
+
+# PROCUREYE RELEASE 47.6.2 BACK TO TOP START
+
+_pe47_top_button = (
+    '<a href="#procureye-top" '
+    'class="pe47-back-top" '
+    'title="Back to Executive Dashboard" '
+    'aria-label="Back to Executive Dashboard">'
+    '↑'
+    '</a>'
+)
+
+st.markdown(
+    _pe47_top_button,
+    unsafe_allow_html=True
+)
+
+# END PROCUREYE RELEASE 47.6.2 BACK TO TOP
+
+
+# PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   QUICK NAVIGATION TITLE
+   ========================================================== */
+
+.pe47-nav-title {
+    color: #EFFF00 !important;
+    font-size: 1.05rem !important;
+    font-weight: 800 !important;
+    letter-spacing: .10em !important;
+
+    margin-top: .10rem !important;
+    margin-bottom: .70rem !important;
+}
+
+
+/* ==========================================================
+   QUICK NAVIGATION BUTTONS
+   ========================================================== */
+
+.pe47-nav-button,
+.pe47-nav-button:link,
+.pe47-nav-button:visited {
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6 !important;
+    border-radius: 7px !important;
+
+    font-weight: 700 !important;
+
+    text-decoration: none !important;
+}
+
+.pe47-nav-button:hover {
+
+    color: #0B2D4D !important;
+    border-color: #EFFF00 !important;
+
+    text-decoration: none !important;
+}
+
+
+/* ==========================================================
+   FLOATING BACK TO TOP
+   ========================================================== */
+
+.pe47-back-top,
+.pe47-back-top:link,
+.pe47-back-top:visited {
+
+    position: fixed !important;
+
+    right: 25px !important;
+    bottom: 90px !important;
+
+    width: 54px !important;
+    height: 54px !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    background: #0B2D4D !important;
+
+    /* GIALLO LIMONE */
+    color: #EFFF00 !important;
+
+    border: 2px solid #EFFF00 !important;
+
+    border-radius: 50% !important;
+
+    font-size: 2rem !important;
+    font-weight: 900 !important;
+
+    line-height: 1 !important;
+
+    text-decoration: none !important;
+
+    box-shadow:
+        0 5px 18px rgba(0,0,0,.32) !important;
+
+    z-index: 999999 !important;
+}
+
+
+.pe47-back-top:hover {
+
+    background: #123B5D !important;
+    color: #EFFF00 !important;
+
+    transform: translateY(-3px);
+
+    text-decoration: none !important;
+}
+
+
+/* Anchor */
+.pe47-anchor {
+    scroll-margin-top: 85px !important;
+}
+
+
+/* Mobile */
+@media (max-width: 760px) {
+
+    .pe47-nav-title {
+        font-size: .92rem !important;
+    }
+
+    .pe47-back-top {
+
+        width: 48px !important;
+        height: 48px !important;
+
+        right: 14px !important;
+        bottom: 75px !important;
+
+        font-size: 1.75rem !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE
+
+
+# PROCUREYE RELEASE 47.6.3 EXECUTIVE TITLE START
+
+st.markdown("""
+<style>
+
+.pe47-executive-header {
+    margin-top: 1.10rem !important;
+    margin-bottom: .75rem !important;
+}
+
+.pe47-executive-title {
+    color: #EFFF00 !important;
+    font-size: 2.15rem !important;
+    font-weight: 900 !important;
+    line-height: 1.08 !important;
+    letter-spacing: .035em !important;
+}
+
+.pe47-executive-update {
+    color: #91A8B7 !important;
+    font-size: .82rem !important;
+    margin-top: .28rem !important;
+}
+
+/* Mobile */
+@media (max-width: 760px) {
+    .pe47-executive-title {
+        font-size: 1.65rem !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.3 EXECUTIVE TITLE
 
 if __name__ == "__main__":
     run_procureye_dashboard()
