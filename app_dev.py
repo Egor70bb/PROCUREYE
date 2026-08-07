@@ -6206,7 +6206,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.2 VISUAL DEV · Navigation Polish
+    <div class="pe-release">Release 47.6.3 VISUAL DEV · Executive Header Polish
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6745,7 +6745,15 @@ def run_procureye_dashboard():
 
     pe47_anchor("procureye-top")
 
-    section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+    st.markdown(
+        '<div class="pe47-executive-header">'
+        '<div class="pe47-executive-title">EXECUTIVE DASHBOARD</div>'
+        '<div class="pe47-executive-update">'
+        + datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC")
+        + '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
     daily_market_brief = build_daily_market_brief(
         brent=brent,
         wti=wti,
@@ -8648,6 +8656,43 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE
+
+
+# PROCUREYE RELEASE 47.6.3 EXECUTIVE TITLE START
+
+st.markdown("""
+<style>
+
+.pe47-executive-header {
+    margin-top: 1.10rem !important;
+    margin-bottom: .75rem !important;
+}
+
+.pe47-executive-title {
+    color: #EFFF00 !important;
+    font-size: 2.15rem !important;
+    font-weight: 900 !important;
+    line-height: 1.08 !important;
+    letter-spacing: .035em !important;
+}
+
+.pe47-executive-update {
+    color: #91A8B7 !important;
+    font-size: .82rem !important;
+    margin-top: .28rem !important;
+}
+
+/* Mobile */
+@media (max-width: 760px) {
+    .pe47-executive-title {
+        font-size: 1.65rem !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.3 EXECUTIVE TITLE
 
 if __name__ == "__main__":
     run_procureye_dashboard()
