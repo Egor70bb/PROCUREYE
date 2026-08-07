@@ -1490,9 +1490,7 @@ def render_decision_journal():
         )
 
     with j2:
-        st.metric(
-            "Latest Signal",
-            str(frame.iloc[0]["Signal"])
+        pe47_status_metric("Latest Signal", str(frame.iloc[0]["Signal"])
         )
 
     with j3:
@@ -1733,10 +1731,7 @@ def render_adaptive_news_weight(
         )
 
     with n4:
-        st.metric(
-            "News Direction",
-            adaptive_news["direction"]
-        )
+        pe47_status_metric("News Direction", adaptive_news["direction"])
 
     st.progress(
         int(
@@ -5799,6 +5794,50 @@ def pe47_compact_metric(
         )
 
 
+
+# PROCUREYE 47.2 SEMANTIC HELPER START
+
+def pe47_status_metric(label, value):
+
+    import html
+
+    clean = (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+    if clean in ("LONG", "BULLISH"):
+        css_class = "pe47-bull"
+
+    elif clean in ("SHORT", "BEARISH"):
+        css_class = "pe47-bear"
+
+    elif clean in ("WAIT", "NEUTRAL"):
+        css_class = "pe47-neutral"
+
+    else:
+        css_class = "pe47-standard"
+
+    st.markdown(
+        f"""
+        <div class="pe47-status-card">
+            <div class="pe47-status-label">
+                {html.escape(str(label))}
+            </div>
+            <div class="pe47-status-value {css_class}">
+                {html.escape(clean)}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# PROCUREYE 47.2 SEMANTIC HELPER END
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -5950,7 +5989,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.1 VISUAL DEV · Metric Reset
+    <div class="pe-release">Release 47.2 VISUAL DEV · Semantic Colors
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6508,7 +6547,7 @@ def run_procureye_dashboard():
     q1, q2, q3, q4 = st.columns(4)
 
     with q1:
-        st.metric("Signal", signal)
+        pe47_status_metric("Signal", signal)
 
     with q2:
         st.metric(
@@ -6558,7 +6597,7 @@ def run_procureye_dashboard():
         )
 
     with c3:
-        st.metric("Signal", signal)
+        pe47_status_metric("Signal", signal)
 
     with c4:
         st.metric("Market Score", f"{score}/100")
@@ -7289,6 +7328,124 @@ button[data-testid="stBaseButton-tertiary"] * {
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.1 VISUAL
+
+
+# PROCUREYE 47.2 STYLE START
+
+st.markdown("""
+<style>
+
+/* ==============================================
+   CARD BLU: TESTO SEMPRE BIANCO
+   ============================================== */
+
+div[data-testid="stMetric"],
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: #FFFFFF !important;
+}
+
+
+/* ==============================================
+   STATUS CARD
+   ============================================== */
+
+.pe47-status-card {
+    background: #123B5D;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+    min-height: 82px;
+}
+
+.pe47-status-label {
+    color: #FFFFFF !important;
+    font-size: 0.82rem;
+    margin-bottom: 0.22rem;
+}
+
+.pe47-status-value {
+    font-size: 1.45rem;
+    font-weight: 600;
+}
+
+
+/* LONG / BULLISH */
+.pe47-bull {
+    color: #22C55E !important;
+}
+
+
+/* SHORT / BEARISH */
+.pe47-bear {
+    color: #EF4444 !important;
+}
+
+
+/* WAIT / NEUTRAL */
+.pe47-neutral {
+    color: #FACC15 !important;
+}
+
+
+/* Altri stati */
+.pe47-standard {
+    color: #FFFFFF !important;
+}
+
+
+/* ==============================================
+   BOTTONI BIANCHI
+   ============================================== */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+    border-color: #B8C9D6 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: #0B2D4D !important;
+}
+
+
+/* Refresh */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+}
+
+
+/* Plotly */
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: #0B2D4D !important;
+}
+
+
+/* Signal Change */
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+    font-size: 0.76rem !important;
+    line-height: 1.0 !important;
+    white-space: normal !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# PROCUREYE 47.2 STYLE END
+
 
 if __name__ == "__main__":
     run_procureye_dashboard()
