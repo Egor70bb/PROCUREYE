@@ -5989,7 +5989,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.2 VISUAL DEV · Semantic Colors
+    <div class="pe-release">Release 47.3 VISUAL DEV · Visual Polish
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -7445,6 +7445,259 @@ button[data-testid="stBaseButton-tertiary"] * {
 """, unsafe_allow_html=True)
 
 # PROCUREYE 47.2 STYLE END
+
+
+
+# PROCUREYE RELEASE 47.3 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.3 — VISUAL POLISH
+   ========================================================== */
+
+:root {
+    --pe-navy: #0B2D4D;
+    --pe-white: #FFFFFF;
+    --pe-green: #22C55E;
+    --pe-red: #EF4444;
+    --pe-yellow: #FACC15;
+    --pe-border: rgba(185,205,220,.26);
+}
+
+
+/* ----------------------------------------------------------
+   PAGINA
+   ---------------------------------------------------------- */
+
+.block-container {
+    padding-top: 1.25rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1500px !important;
+}
+
+
+/* ----------------------------------------------------------
+   TITOLI
+   ---------------------------------------------------------- */
+
+h1 {
+    margin-bottom: 0.20rem !important;
+}
+
+h2 {
+    margin-top: 1.55rem !important;
+    margin-bottom: 0.20rem !important;
+}
+
+h3 {
+    margin-top: 1.15rem !important;
+    margin-bottom: 0.18rem !important;
+}
+
+
+/* Subtitle / caption */
+[data-testid="stCaptionContainer"] {
+    margin-top: 0 !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLONNE
+   ---------------------------------------------------------- */
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.70rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRIC CARD
+   mantiene stile blu + testo bianco
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding: 0.38rem 0.15rem !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"],
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* Valori leggermente più compatti */
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] {
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   STATUS CARD 47.2
+   ---------------------------------------------------------- */
+
+.pe47-status-card {
+    min-height: 78px !important;
+    padding: 0.50rem 0.70rem !important;
+}
+
+.pe47-status-label {
+    font-size: 0.80rem !important;
+}
+
+.pe47-status-value {
+    font-size: 1.32rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* SEMANTICI */
+.pe47-bull {
+    color: var(--pe-green) !important;
+}
+
+.pe47-bear {
+    color: var(--pe-red) !important;
+}
+
+.pe47-neutral {
+    color: var(--pe-yellow) !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background: var(--pe-white) !important;
+    color: var(--pe-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    font-weight: 600 !important;
+
+    box-shadow: none !important;
+
+    min-height: 2.35rem !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: var(--pe-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background: var(--pe-white) !important;
+    color: var(--pe-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+    font-size: 0.72rem !important;
+    line-height: 1.0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION / DECISION
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+    font-size: 0.92rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   ALERT / INFO BOX
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    margin-top: 0.30rem !important;
+    margin-bottom: 0.60rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   DATAFRAME
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    margin-top: 0.20rem !important;
+    margin-bottom: 0.65rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   EXPANDER
+   ---------------------------------------------------------- */
+
+[data-testid="stExpander"] {
+    margin-top: 0.30rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   PLOTLY
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: var(--pe-white) !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   MOBILE / TABLET
+   ---------------------------------------------------------- */
+
+@media (max-width: 900px) {
+
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+
+    .pe47-status-value {
+        font-size: 1.12rem !important;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.3 VISUAL
 
 
 if __name__ == "__main__":
