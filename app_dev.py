@@ -7035,5 +7035,153 @@ button[data-testid="stBaseButton-tertiary"] * {
 # END PROCUREYE VISUAL 04
 
 
+
+# PROCUREYE SEMANTIC COLORS START
+
+_pe_original_metric = st.metric
+_pe_semantic_counter = 0
+
+
+def _pe_clean_semantic(value):
+
+    text = (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+    return text
+
+
+def _pe_semantic_metric(
+    label,
+    value,
+    delta=None,
+    delta_color="normal",
+    help=None,
+    label_visibility="visible",
+    border=False,
+    width="stretch"
+):
+
+    global _pe_semantic_counter
+
+    semantic = _pe_clean_semantic(value)
+
+    color_group = None
+
+    if semantic in {
+        "LONG",
+        "BULLISH"
+    }:
+        color_group = "green"
+
+    elif semantic in {
+        "SHORT",
+        "BEARISH"
+    }:
+        color_group = "red"
+
+    elif semantic in {
+        "WAIT",
+        "NEUTRAL"
+    }:
+        color_group = "yellow"
+
+    if color_group is None:
+
+        return _pe_original_metric(
+            label=label,
+            value=value,
+            delta=delta,
+            delta_color=delta_color,
+            help=help,
+            label_visibility=label_visibility,
+            border=border,
+            width=width
+        )
+
+    _pe_semantic_counter += 1
+
+    key = (
+        f"pe_semantic_{color_group}_"
+        f"{_pe_semantic_counter}"
+    )
+
+    with st.container(key=key):
+
+        return _pe_original_metric(
+            label=label,
+            value=value,
+            delta=delta,
+            delta_color=delta_color,
+            help=help,
+            label_visibility=label_visibility,
+            border=border,
+            width=width
+        )
+
+
+# Tutte le metriche successive usano automaticamente
+# la colorazione semantica.
+st.metric = _pe_semantic_metric
+
+
+st.markdown("""
+<style>
+
+/* ==============================
+   BULLISH / LONG -> VERDE
+   ============================== */
+
+[class*="st-key-pe_semantic_green"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe_semantic_green"]
+[data-testid="stMetricValue"] * {
+    color: #22C55E !important;
+}
+
+
+/* ==============================
+   BEARISH / SHORT -> ROSSO
+   ============================== */
+
+[class*="st-key-pe_semantic_red"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe_semantic_red"]
+[data-testid="stMetricValue"] * {
+    color: #EF4444 !important;
+}
+
+
+/* ==============================
+   WAIT / NEUTRAL -> GIALLO
+   ============================== */
+
+[class*="st-key-pe_semantic_yellow"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe_semantic_yellow"]
+[data-testid="stMetricValue"] * {
+    color: #FACC15 !important;
+}
+
+
+/* Le label dei riquadri blu restano BIANCHE */
+[class*="st-key-pe_semantic_"]
+[data-testid="stMetricLabel"],
+[class*="st-key-pe_semantic_"]
+[data-testid="stMetricLabel"] * {
+    color: #FFFFFF !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# PROCUREYE SEMANTIC COLORS END
+
+
 if __name__ == "__main__":
     run_procureye_dashboard()
