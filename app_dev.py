@@ -5370,6 +5370,345 @@ def render_outcome_validation(report):
 
 # END PROCUREYE RELEASE 46.1 DEV
 
+
+# ============================================================
+# PROCUREYE RELEASE 46.2 DEV — LEARNING STATISTICS
+# ============================================================
+
+def build_learning_statistics():
+
+    from pathlib import Path
+
+    file = Path(
+        "/tmp/procureye_prediction_history.csv"
+    )
+
+    empty = {
+        "predictions": 0,
+        "validated": 0,
+        "accuracy": 0.0,
+        "brier": 0.0,
+        "recent_accuracy": 0.0,
+        "by_signal": pd.DataFrame(),
+        "by_driver": pd.DataFrame(),
+        "by_scenario": pd.DataFrame(),
+        "by_confidence": pd.DataFrame()
+    }
+
+    if not file.exists():
+        return empty
+
+    try:
+        history = pd.read_csv(file)
+    except Exception:
+        return empty
+
+    if history.empty:
+        return empty
+
+    result = empty.copy()
+    result["predictions"] = len(history)
+
+    if "outcome_validated" not in history.columns:
+        return result
+
+    valid = history[
+        history["outcome_validated"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ].copy()
+
+    if valid.empty:
+        return result
+
+    valid["Correct"] = (
+        valid["prediction_correct"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    )
+
+    valid["CorrectInt"] = (
+        valid["Correct"].astype(int)
+    )
+
+    result["validated"] = len(valid)
+
+    result["accuracy"] = round(
+        valid["CorrectInt"].mean() * 100,
+        1
+    )
+
+    if "brier_score" in valid.columns:
+
+        brier = pd.to_numeric(
+            valid["brier_score"],
+            errors="coerce"
+        ).dropna()
+
+        if not brier.empty:
+            result["brier"] = round(
+                brier.mean(),
+                4
+            )
+
+    recent = valid.tail(30)
+
+    if not recent.empty:
+        result["recent_accuracy"] = round(
+            recent["CorrectInt"].mean() * 100,
+            1
+        )
+
+    # Accuracy per LONG / WAIT / SHORT
+    if "prediction" in valid.columns:
+
+        by_signal = (
+            valid.groupby("prediction")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={"prediction": "Signal"}
+            )
+        )
+
+        by_signal["Accuracy"] = (
+            by_signal["Accuracy"] * 100
+        ).round(1)
+
+        result["by_signal"] = by_signal
+
+    # Accuracy per driver
+    if "dominant_driver" in valid.columns:
+
+        by_driver = (
+            valid.groupby("dominant_driver")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={
+                    "dominant_driver": "Driver"
+                }
+            )
+        )
+
+        by_driver["Accuracy"] = (
+            by_driver["Accuracy"] * 100
+        ).round(1)
+
+        result["by_driver"] = (
+            by_driver.sort_values(
+                ["Predictions", "Accuracy"],
+                ascending=False
+            )
+        )
+
+    # Accuracy per Scenario
+    if "scenario" in valid.columns:
+
+        by_scenario = (
+            valid.groupby("scenario")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={"scenario": "Scenario"}
+            )
+        )
+
+        by_scenario["Accuracy"] = (
+            by_scenario["Accuracy"] * 100
+        ).round(1)
+
+        result["by_scenario"] = by_scenario
+
+    # Accuracy per Confidence bucket
+    if "confidence_v2" in valid.columns:
+
+        confidence = pd.to_numeric(
+            valid["confidence_v2"],
+            errors="coerce"
+        )
+
+        valid["Confidence Bucket"] = pd.cut(
+            confidence,
+            bins=[-1, 39, 54, 69, 84, 100],
+            labels=[
+                "VERY LOW",
+                "LOW",
+                "MEDIUM",
+                "HIGH",
+                "VERY HIGH"
+            ]
+        )
+
+        by_confidence = (
+            valid.dropna(
+                subset=["Confidence Bucket"]
+            )
+            .groupby(
+                "Confidence Bucket",
+                observed=True
+            )
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+        )
+
+        by_confidence["Accuracy"] = (
+            by_confidence["Accuracy"] * 100
+        ).round(1)
+
+        result["by_confidence"] = (
+            by_confidence
+        )
+
+    return result
+
+
+def render_learning_statistics(report):
+
+    section(
+        "Learning Statistics",
+        "Observed predictive performance — no automatic weight changes"
+    )
+
+    a, b, c, d = st.columns(4)
+
+    with a:
+        st.metric(
+            "Predictions",
+            int(report.get("predictions", 0))
+        )
+
+    with b:
+        st.metric(
+            "Validated",
+            int(report.get("validated", 0))
+        )
+
+    with c:
+        st.metric(
+            "Overall Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+
+    with d:
+        st.metric(
+            "Last 30 Accuracy",
+            f"{report.get('recent_accuracy', 0):.1f}%"
+        )
+
+    if report.get("validated", 0) == 0:
+
+        st.info(
+            "Learning Statistics is active. "
+            "Statistics will appear after the first "
+            "24-hour outcomes are validated."
+        )
+
+        return
+
+    st.metric(
+        "Average Brier Score",
+        f"{report.get('brier', 0):.4f}"
+    )
+
+    by_signal = report.get("by_signal")
+
+    if isinstance(by_signal, pd.DataFrame) and not by_signal.empty:
+
+        st.markdown("#### Accuracy by Signal")
+
+        st.dataframe(
+            by_signal,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Accuracy":
+                    st.column_config.ProgressColumn(
+                        "Accuracy",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    by_driver = report.get("by_driver")
+
+    if isinstance(by_driver, pd.DataFrame) and not by_driver.empty:
+
+        st.markdown("#### Accuracy by Driver")
+
+        st.dataframe(
+            by_driver.head(10),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Accuracy":
+                    st.column_config.ProgressColumn(
+                        "Accuracy",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    by_scenario = report.get("by_scenario")
+
+    if isinstance(by_scenario, pd.DataFrame) and not by_scenario.empty:
+
+        st.markdown("#### Accuracy by Scenario")
+
+        st.dataframe(
+            by_scenario,
+            width="stretch",
+            hide_index=True
+        )
+
+    by_confidence = report.get(
+        "by_confidence"
+    )
+
+    if (
+        isinstance(by_confidence, pd.DataFrame)
+        and not by_confidence.empty
+    ):
+
+        st.markdown(
+            "#### Accuracy by Confidence"
+        )
+
+        st.dataframe(
+            by_confidence,
+            width="stretch",
+            hide_index=True
+        )
+
+    st.caption(
+        "Learning Statistics measures historical performance only. "
+        "Release 46.2 does not modify Predictive Intelligence weights."
+    )
+
+# END PROCUREYE RELEASE 46.2 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -5521,7 +5860,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 46.1 DEV · Outcome Validation
+    <div class="pe-release">Release 46.2 DEV · Learning Statistics
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6352,6 +6691,10 @@ def run_procureye_dashboard():
     )
 
     render_outcome_validation(outcome_validation)
+
+    learning_statistics = build_learning_statistics()
+
+    render_learning_statistics(learning_statistics)
 
     record_decision_journal(
         brent=brent,
