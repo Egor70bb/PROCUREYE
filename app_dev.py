@@ -6206,7 +6206,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.3 VISUAL DEV · Executive Header Polish
+    <div class="pe-release">Release 47.6.4 VISUAL DEV · Back to Top Position
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -8584,7 +8584,7 @@ st.markdown("""
     position: fixed !important;
 
     right: 25px !important;
-    bottom: 25px !important;
+    bottom: 90px !important;
 
     width: 54px !important;
     height: 54px !important;
@@ -8646,7 +8646,7 @@ st.markdown("""
         height: 48px !important;
 
         right: 14px !important;
-        bottom: 18px !important;
+        bottom: 75px !important;
 
         font-size: 1.75rem !important;
     }
