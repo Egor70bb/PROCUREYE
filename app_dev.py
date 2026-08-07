@@ -5781,9 +5781,7 @@ def _pe_visual_metric(
         )
 
 
-st.metric = _pe_visual_metric
-
-
+# PROCUREYE 47.1: st.metric native preserved
 def pe47_compact_metric(
     key,
     label,
@@ -5791,6 +5789,7 @@ def pe47_compact_metric(
     *args,
     **kwargs
 ):
+    # key mantenuta solo come container visuale
     with st.container(key=key):
         return st.metric(
             label,
@@ -5798,6 +5797,7 @@ def pe47_compact_metric(
             *args,
             **kwargs
         )
+
 
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
@@ -5950,7 +5950,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.1 VISUAL DEV · Layout Refinement
+    <div class="pe-release">Release 47.1 VISUAL DEV · Metric Reset
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
