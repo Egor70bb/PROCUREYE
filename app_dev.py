@@ -6949,5 +6949,91 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"] {
 # END PROCUREYE FINAL VISUAL COLOR OVERRIDE
 
 
+
+# PROCUREYE VISUAL 04 — FINAL COLOR SYSTEM
+st.markdown("""
+<style>
+
+/* ==========================================================
+   1. RIQUADRI BLU -> TESTO BIANCO COME RELEASE 46
+   ========================================================== */
+
+div[data-testid="stMetric"] {
+    color: #FFFFFF !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] *,
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+    color: #FFFFFF !important;
+}
+
+/* ==========================================================
+   2. BOTTONI BIANCHI -> TESTO BLUE SCURO
+   ========================================================== */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background-color: #FFFFFF !important;
+    color: #0B2D4D !important;
+    border: 1px solid #B4C5D3 !important;
+    font-weight: 650 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: #0B2D4D !important;
+}
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background-color: #FFFFFF !important;
+    color: #0B2D4D !important;
+}
+
+/* ==========================================================
+   3. BOTTONI BIANCHI DEI GRAFICI
+   ========================================================== */
+
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: #0B2D4D !important;
+    font-weight: 650 !important;
+}
+
+/* ==========================================================
+   4. SIGNAL CHANGE COMPATTO
+   ========================================================== */
+
+.st-key-pe_signal_change [data-testid="stMetricValue"] {
+    font-size: 0.80rem !important;
+    line-height: 1.05 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+/* Correlation State */
+.st-key-pe_correlation_state [data-testid="stMetricValue"] {
+    font-size: 1.02rem !important;
+}
+
+/* Decision Mode */
+.st-key-pe_decision_mode [data-testid="stMetricValue"] {
+    font-size: 1.02rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+# END PROCUREYE VISUAL 04
+
+
 if __name__ == "__main__":
     run_procureye_dashboard()
