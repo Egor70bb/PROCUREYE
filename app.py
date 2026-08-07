@@ -4070,6 +4070,207 @@ def render_explainable_decision_v2(report):
 # END PROCUREYE RELEASE 42.6 DEV
 
 
+
+# PROCUREYE RELEASE 43.0 DEV — PREDICTIVE INTELLIGENCE
+
+def calculate_predictive_intelligence(
+    signal, score, brent, wti, risk,
+    adaptive_news, driver_report,
+    correlation_report, confidence_v2
+):
+    import math
+
+    def n(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    def d(v):
+        v = str(v).upper()
+        if v in ("BULLISH", "LONG"):
+            return 1.0
+        if v in ("BEARISH", "SHORT"):
+            return -1.0
+        return 0.0
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+    market_score = n(score, 50)
+
+    bt = d(brent.get("trend", "UNKNOWN"))
+    wt = d(wti.get("trend", "UNKNOWN"))
+
+    bm = n(brent.get("momentum", 0))
+    wm = n(wti.get("momentum", 0))
+
+    dd = d(driver_report.get("direction", "NEUTRAL"))
+    ds = n(driver_report.get("strength", 0))
+    dc = n(driver_report.get("confidence", 0))
+
+    cd = d(correlation_report.get("direction", "NEUTRAL"))
+    align = n(correlation_report.get("alignment", 0))
+    cc = n(correlation_report.get("confidence", 0))
+    contradictions = n(correlation_report.get("contradictions", 0))
+
+    news = n(adaptive_news.get("effective_score", 0))
+    confidence = n(confidence_v2.get("score", 0))
+
+    score_p = max(-1, min(1, (market_score - 50) / 50))
+    trend_p = (bt + wt) / 2
+    momentum_p = max(-1, min(1, (bm + wm) / 20))
+    driver_p = dd * ds * dc / 10000
+    correlation_p = cd * align * cc / 10000
+    news_p = max(-1, min(1, news / 50))
+
+    pressure = (
+        score_p * 0.28 +
+        trend_p * 0.19 +
+        momentum_p * 0.17 +
+        driver_p * 0.15 +
+        correlation_p * 0.12 +
+        news_p * 0.09
+    )
+
+    pressure += {
+        "LONG": 0.06,
+        "SHORT": -0.06,
+        "WAIT": 0.0
+    }.get(clean_signal, 0.0)
+
+    risk_p = {
+        "LOW": 0.03,
+        "MEDIUM": 0.08,
+        "HIGH": 0.15
+    }.get(str(risk).upper(), 0.08)
+
+    uncertainty = (
+        ((100 - confidence) / 100) * 0.38 +
+        ((100 - align) / 100) * 0.27 +
+        min(1, contradictions / 3) * 0.20 +
+        risk_p
+    )
+
+    logits = {
+        "LONG": pressure * 3.4,
+        "WAIT": uncertainty * 2.5 - abs(pressure) * 1.4,
+        "SHORT": -pressure * 3.4
+    }
+
+    maximum = max(logits.values())
+
+    raw = {
+        k: math.exp(v - maximum)
+        for k, v in logits.items()
+    }
+
+    total = sum(raw.values())
+
+    probs = {
+        k: 100 * v / total
+        for k, v in raw.items()
+    }
+
+    prediction = max(probs, key=probs.get)
+
+    ordered = sorted(probs.values(), reverse=True)
+    spread = ordered[0] - ordered[1]
+    probability = probs[prediction]
+
+    conviction = (
+        "HIGH"
+        if probability >= 65 and spread >= 15
+        else "MEDIUM"
+        if probability >= 50 and spread >= 8
+        else "LOW"
+    )
+
+    table = pd.DataFrame([
+        {"State": k, "Probability": round(v, 1)}
+        for k, v in probs.items()
+    ]).sort_values(
+        "Probability",
+        ascending=False
+    ).reset_index(drop=True)
+
+    return {
+        "prediction": prediction,
+        "probability": round(probability, 1),
+        "long": round(probs["LONG"], 1),
+        "wait": round(probs["WAIT"], 1),
+        "short": round(probs["SHORT"], 1),
+        "spread": round(spread, 1),
+        "conviction": conviction,
+        "pressure": round(pressure, 3),
+        "uncertainty": round(uncertainty, 3),
+        "table": table
+    }
+
+
+def render_predictive_intelligence(report):
+
+    section(
+        "Predictive Intelligence",
+        "Live probability distribution for LONG, WAIT and SHORT"
+    )
+
+    a, b, c, d = st.columns(4)
+
+    with a:
+        st.metric("Prediction", report["prediction"])
+
+    with b:
+        st.metric(
+            "Leading Probability",
+            f"{report['probability']:.1f}%"
+        )
+
+    with c:
+        st.metric("Conviction", report["conviction"])
+
+    with d:
+        st.metric(
+            "Probability Spread",
+            f"{report['spread']:.1f} pt"
+        )
+
+    st.dataframe(
+        report["table"],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Probability": st.column_config.ProgressColumn(
+                "Probability",
+                min_value=0,
+                max_value=100,
+                format="%.1f%%"
+            )
+        }
+    )
+
+    st.info(
+        f"LONG {report['long']:.1f}% · "
+        f"WAIT {report['wait']:.1f}% · "
+        f"SHORT {report['short']:.1f}%"
+    )
+
+    st.caption(
+        "Recalculated on every refresh from market price, "
+        "trend, momentum, current news, drivers, "
+        "correlation, risk and Confidence v2."
+    )
+
+# END PROCUREYE RELEASE 43.0 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -4221,7 +4422,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 42.6 · Explainable Decision Intelligence 2.0
+    <div class="pe-release">Release 43.0 · Predictive Intelligence
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -4994,6 +5195,20 @@ def run_procureye_dashboard():
     render_explainable_decision_v2(
         explainable_decision_v2
     )
+
+    predictive_intelligence = calculate_predictive_intelligence(
+        signal=signal,
+        score=score,
+        brent=brent,
+        wti=wti,
+        risk=risk,
+        adaptive_news=adaptive_news,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        confidence_v2=confidence_intelligence_v2
+    )
+
+    render_predictive_intelligence(predictive_intelligence)
 
     record_decision_journal(
         brent=brent,
