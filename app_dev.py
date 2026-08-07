@@ -6892,5 +6892,62 @@ def run_procureye_dashboard():
     )
 
 
+
+# PROCUREYE FINAL VISUAL COLOR OVERRIDE
+st.markdown("""
+<style>
+
+/* BOTTONI BIANCHI = TESTO BLUE SCURO */
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+    border-color: #B5C6D4 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: #0B2D4D !important;
+}
+
+/* REFRESH NOW = BIANCO + BLUE SCURO */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background-color: #FFFFFF !important;
+    color: #0B2D4D !important;
+}
+
+/* RIQUADRI BLU = TESTO BIANCO */
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+}
+
+/* Signal Change più piccolo */
+.st-key-pe_signal_change [data-testid="stMetricValue"] {
+    font-size: 0.82rem !important;
+    line-height: 1.05 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+/* BOTTONI BIANCHI DEI GRAFICI */
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: #0B2D4D !important;
+    font-weight: 650 !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+# END PROCUREYE FINAL VISUAL COLOR OVERRIDE
+
+
 if __name__ == "__main__":
     run_procureye_dashboard()
