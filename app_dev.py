@@ -895,7 +895,7 @@ def _clean_signal(value):
     )
 
 
-def render_market_delta(brent, wti, signal, score, confidence, risk):
+def render_market_delta(brent, wti, signal, score, confidence):
     SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     current = {
@@ -918,21 +918,6 @@ def render_market_delta(brent, wti, signal, score, confidence, risk):
             previous = None
 
     st.markdown("### 📈 Since Last Refresh")
-
-    pe1, pe2, pe3, pe4 = st.columns(4)
-
-    with pe1:
-        st.metric("Signal", signal)
-
-    with pe2:
-        st.metric("Market Score", f"{score}/100")
-
-    with pe3:
-        st.metric("Confidence", confidence)
-
-    with pe4:
-        st.metric("Risk", risk)
-
 
     if not previous:
         st.caption(
@@ -979,15 +964,15 @@ def render_market_delta(brent, wti, signal, score, confidence, risk):
 
         with c3:
             if old_signal != current["signal"]:
-                pe_visual_metric(
-                    "pe_signal_change",
+                pe47_compact_metric(
+                    "pe47_signal_change",
                     "Signal Change",
                     _clean_signal(current["signal"]),
                     f"{_clean_signal(old_signal)} → {_clean_signal(current['signal'])}"
                 )
             else:
-                pe_visual_metric(
-                    "pe_signal_change",
+                pe47_compact_metric(
+                    "pe47_signal_change",
                     "Signal Change",
                     "UNCHANGED",
                     _clean_signal(current["signal"]),
@@ -2849,7 +2834,8 @@ def render_driver_correlation(report):
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
-        st.metric(
+        pe47_compact_metric(
+            "pe47_correlation_state",
             "Correlation State",
             report.get("state", "UNKNOWN")
         )
@@ -5727,10 +5713,86 @@ def render_learning_statistics(report):
 # END PROCUREYE RELEASE 46.2 DEV
 
 
-def pe_visual_metric(key, label, value, *args, **kwargs):
-    with st.container(key=key):
-        st.metric(label, value, *args, **kwargs)
+# ============================================================
+# RELEASE 47.0 — CENTRAL VISUAL SYSTEM
+# ============================================================
 
+_pe_original_metric = st.metric
+_pe_metric_counter = 0
+
+
+def _pe_clean_state(value):
+
+    return (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+
+def _pe_visual_metric(
+    label,
+    value,
+    *args,
+    **kwargs
+):
+
+    global _pe_metric_counter
+
+    state = _pe_clean_state(value)
+
+    semantic = None
+
+    if state in ("LONG", "BULLISH"):
+        semantic = "bull"
+
+    elif state in ("SHORT", "BEARISH"):
+        semantic = "bear"
+
+    elif state in ("WAIT", "NEUTRAL"):
+        semantic = "neutral"
+
+    if semantic is None:
+        return _pe_original_metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+    _pe_metric_counter += 1
+
+    with st.container(
+        key=f"pe47_{semantic}_{_pe_metric_counter}"
+    ):
+        return _pe_original_metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+
+st.metric = _pe_visual_metric
+
+
+def pe47_compact_metric(
+    key,
+    label,
+    value,
+    *args,
+    **kwargs
+):
+    with st.container(key=key):
+        return st.metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
 
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
@@ -5738,88 +5800,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-st.markdown("""
-<style>
-
-/* =========================================================
-   PROCUREYE — WHITE / DARK BLUE SYSTEM
-   ========================================================= */
-
-/* BOTTONI: BIANCO + BLUE SCURO */
-div[data-testid="stButton"] button {
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
-    border: 1px solid #B9C9D6 !important;
-    font-weight: 650 !important;
-}
-
-div[data-testid="stButton"] button p,
-div[data-testid="stButton"] button span {
-    color: #0B2D4D !important;
-}
-
-/* REFRESH NOW: BIANCO + BLUE SCURO */
-.st-key-global_refresh button {
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
-    border: 1px solid #9FB6C8 !important;
-}
-
-.st-key-global_refresh button p,
-.st-key-global_refresh button span {
-    color: #0B2D4D !important;
-}
-
-/* METRIC CARD BIANCHE */
-div[data-testid="stMetric"] {
-    background-color: #FFFFFF !important;
-    border-radius: 8px !important;
-}
-
-/* TUTTO IL TESTO NELLE CARD BIANCHE */
-div[data-testid="stMetric"] *,
-div[data-testid="stMetric"] label,
-div[data-testid="stMetric"] label p,
-div[data-testid="stMetric"] [data-testid="stMetricValue"],
-div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
-    color: #0B2D4D !important;
-}
-
-/* SIGNAL CHANGE: MOLTO PIÙ PICCOLO */
-.st-key-pe_signal_change [data-testid="stMetricValue"] {
-    font-size: 0.98rem !important;
-    line-height: 1.10 !important;
-    white-space: normal !important;
-    overflow-wrap: anywhere !important;
-}
-
-/* PLOTLY BUTTONS */
-.js-plotly-plot .rangeselector rect {
-    fill: #FFFFFF !important;
-}
-
-.js-plotly-plot .rangeselector text {
-    fill: #0B2D4D !important;
-    font-weight: 650 !important;
-}
-
-/* Download / toolbar buttons bianchi */
-button[data-testid="stBaseButton-secondary"],
-button[data-testid="stBaseButton-tertiary"] {
-    background: #FFFFFF !important;
-    color: #0B2D4D !important;
-}
-
-button[data-testid="stBaseButton-secondary"] *,
-button[data-testid="stBaseButton-tertiary"] * {
-    color: #0B2D4D !important;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
 
 
 import streamlit.components.v1 as components
@@ -5965,7 +5945,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 46.2 VISUAL DEV · Refinement 03
+    <div class="pe-release">Release 47.0 VISUAL DEV · Professional UI
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6520,19 +6500,29 @@ def run_procureye_dashboard():
         daily_market_brief
     )
 
-    db1, db2, db3, db4 = st.columns(4)
+    q1, q2, q3, q4 = st.columns(4)
 
-    with db1:
+    with q1:
         st.metric("Signal", signal)
 
-    with db2:
-        st.metric("Market Score", f"{score}/100")
+    with q2:
+        st.metric(
+            "Market Score",
+            f"{score}/100"
+        )
 
-    with db3:
-        st.metric("Confidence", confidence)
+    with q3:
+        st.metric(
+            "Confidence",
+            confidence
+        )
 
-    with db4:
-        st.metric("Risk", risk)
+    with q4:
+        st.metric(
+            "Risk",
+            risk
+        )
+
 
     render_system_health(brent_df, wti_df, signal_news)
 
@@ -6541,8 +6531,7 @@ def run_procureye_dashboard():
         wti,
         signal,
         score,
-        confidence,
-        risk
+        confidence
     )
 
 
@@ -6881,7 +6870,11 @@ def run_procureye_dashboard():
         st.metric("Learning State", "ACTIVE")
 
     with s3:
-        st.metric("Decision Mode", "SUPPORT ONLY")
+        pe47_compact_metric(
+            "pe47_decision_mode",
+            "Decision Mode",
+            "SUPPORT ONLY"
+        )
 
     with s4:
         st.metric("Human Oversight", "REQUIRED")
@@ -6893,139 +6886,114 @@ def run_procureye_dashboard():
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-# PROCUREYE VISUAL CLEANUP START
-
-_pe_real_metric = st.metric
-_pe_metric_count = 0
-
-
-def _pe_metric_color(value):
-
-    clean = (
-        str(value)
-        .replace("🟢", "")
-        .replace("🔴", "")
-        .replace("🟡", "")
-        .strip()
-        .upper()
-    )
-
-    if clean in ("LONG", "BULLISH"):
-        return "bull"
-
-    if clean in ("SHORT", "BEARISH"):
-        return "bear"
-
-    if clean in ("WAIT", "NEUTRAL"):
-        return "neutral"
-
-    return None
-
-
-def _pe_metric(
-    label,
-    value,
-    delta=None,
-    delta_color="normal",
-    help=None,
-    label_visibility="visible",
-    border=False,
-    width="stretch"
-):
-
-    global _pe_metric_count
-
-    semantic = _pe_metric_color(value)
-
-    if semantic is None:
-
-        return _pe_real_metric(
-            label,
-            value,
-            delta=delta,
-            delta_color=delta_color,
-            help=help,
-            label_visibility=label_visibility,
-            border=border,
-            width=width
-        )
-
-    _pe_metric_count += 1
-
-    with st.container(
-        key=f"pe_{semantic}_{_pe_metric_count}"
-    ):
-        return _pe_real_metric(
-            label,
-            value,
-            delta=delta,
-            delta_color=delta_color,
-            help=help,
-            label_visibility=label_visibility,
-            border=border,
-            width=width
-        )
-
-
-st.metric = _pe_metric
-
+# ============================================================
+# PROCUREYE RELEASE 47.0 — PROFESSIONAL UI
+# ============================================================
 
 st.markdown("""
 <style>
 
-/* ==========================================================
-   PROCUREYE CLEAN COLOR SYSTEM
-   ========================================================== */
+/* --------------------------------------------
+   BASE
+   -------------------------------------------- */
 
+:root {
+    --pe-navy: #0B2D4D;
+    --pe-blue: #123B5D;
+    --pe-border: #AFC2D2;
+    --pe-white: #FFFFFF;
 
-/* ----------------------------------------------------------
-   CARD / RIQUADRI BLU:
-   come Release 46 -> scritte BIANCHE
-   ---------------------------------------------------------- */
-
-div[data-testid="stMetric"],
-div[data-testid="stMetric"] label,
-div[data-testid="stMetric"] label *,
-div[data-testid="stMetric"] [data-testid="stMetricValue"],
-div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
-    color: #FFFFFF !important;
+    --pe-green: #22C55E;
+    --pe-red: #EF4444;
+    --pe-yellow: #FACC15;
 }
 
 
-/* ----------------------------------------------------------
-   BOTTONI:
-   solo BIANCHI con testo BLUE SCURO
-   ---------------------------------------------------------- */
+/* --------------------------------------------
+   METRIC CARDS
+   Blu come Release 46 + testo bianco
+   -------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    color: var(--pe-white) !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"],
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* --------------------------------------------
+   COLORI SEMANTICI
+   -------------------------------------------- */
+
+/* LONG / BULLISH */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-green) !important;
+}
+
+
+/* SHORT / BEARISH */
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-red) !important;
+}
+
+
+/* WAIT / NEUTRAL */
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-yellow) !important;
+}
+
+
+/* Le label restano bianche */
+[class*="st-key-pe47_"]
+[data-testid="stMetricLabel"],
+[class*="st-key-pe47_"]
+[data-testid="stMetricLabel"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* --------------------------------------------
+   BOTTONI
+   SOLO bianchi + scritte blue scuro
+   -------------------------------------------- */
 
 div[data-testid="stButton"] button,
 button[data-testid="stBaseButton-secondary"],
 button[data-testid="stBaseButton-tertiary"] {
 
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
+    background: var(--pe-white) !important;
 
-    border: 1px solid #B8C8D5 !important;
+    color: var(--pe-navy) !important;
+
+    border: 1px solid
+        var(--pe-border) !important;
 
     box-shadow: none !important;
+
+    font-weight: 600 !important;
 }
 
 div[data-testid="stButton"] button *,
 button[data-testid="stBaseButton-secondary"] *,
 button[data-testid="stBaseButton-tertiary"] * {
 
-    color: #0B2D4D !important;
+    color: var(--pe-navy) !important;
 }
 
 
@@ -7033,102 +7001,79 @@ button[data-testid="stBaseButton-tertiary"] * {
 .st-key-global_refresh button,
 .st-key-global_refresh button * {
 
-    background-color: #FFFFFF !important;
-    color: #0B2D4D !important;
+    background:
+        var(--pe-white) !important;
+
+    color:
+        var(--pe-navy) !important;
 }
 
 
-/* ----------------------------------------------------------
-   NON CREARE NUOVI RIQUADRI SCURI
-   ---------------------------------------------------------- */
+/* --------------------------------------------
+   SIGNAL CHANGE
+   -------------------------------------------- */
 
-[class*="st-key-pe_bull"],
-[class*="st-key-pe_bear"],
-[class*="st-key-pe_neutral"] {
-
-    background: transparent !important;
-}
-
-
-/* ----------------------------------------------------------
-   COLORI SEMANTICI
-   ---------------------------------------------------------- */
-
-/* LONG / BULLISH -> VERDE */
-[class*="st-key-pe_bull"]
-[data-testid="stMetricValue"],
-[class*="st-key-pe_bull"]
-[data-testid="stMetricValue"] * {
-
-    color: #22C55E !important;
-}
-
-
-/* SHORT / BEARISH -> ROSSO */
-[class*="st-key-pe_bear"]
-[data-testid="stMetricValue"],
-[class*="st-key-pe_bear"]
-[data-testid="stMetricValue"] * {
-
-    color: #EF4444 !important;
-}
-
-
-/* WAIT / NEUTRAL -> GIALLO */
-[class*="st-key-pe_neutral"]
-[data-testid="stMetricValue"],
-[class*="st-key-pe_neutral"]
-[data-testid="stMetricValue"] * {
-
-    color: #FACC15 !important;
-}
-
-
-/* Label della card sempre bianca */
-[class*="st-key-pe_bull"]
-[data-testid="stMetricLabel"] *,
-[class*="st-key-pe_bear"]
-[data-testid="stMetricLabel"] *,
-[class*="st-key-pe_neutral"]
-[data-testid="stMetricLabel"] * {
-
-    color: #FFFFFF !important;
-}
-
-
-/* ----------------------------------------------------------
-   SIGNAL CHANGE PIÙ PICCOLO
-   ---------------------------------------------------------- */
-
-.st-key-pe_signal_change
+.st-key-pe47_signal_change
 [data-testid="stMetricValue"] {
 
     font-size: 0.82rem !important;
+
     line-height: 1.05 !important;
 
     white-space: normal !important;
+
     overflow-wrap: anywhere !important;
 }
 
 
-/* ----------------------------------------------------------
-   PULSANTI GRAFICI
-   ---------------------------------------------------------- */
+/* Correlation State */
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"] {
 
-.js-plotly-plot .rangeselector rect {
-    fill: #FFFFFF !important;
+    font-size: 1.00rem !important;
 }
 
-.js-plotly-plot .rangeselector text {
 
-    fill: #0B2D4D !important;
-    font-weight: 650 !important;
+/* Decision Mode */
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: 1.00rem !important;
+}
+
+
+/* --------------------------------------------
+   PLOTLY RANGE BUTTONS
+   -------------------------------------------- */
+
+.js-plotly-plot
+.rangeselector rect {
+
+    fill:
+        var(--pe-white) !important;
+}
+
+.js-plotly-plot
+.rangeselector text {
+
+    fill:
+        var(--pe-navy) !important;
+
+    font-weight: 600 !important;
+}
+
+
+/* --------------------------------------------
+   Spacing uniforme
+   -------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding-top: 0.15rem;
+    padding-bottom: 0.15rem;
 }
 
 </style>
 """, unsafe_allow_html=True)
-
-# PROCUREYE VISUAL CLEANUP END
 
 
 if __name__ == "__main__":
