@@ -4271,6 +4271,333 @@ def render_predictive_intelligence(report):
 
 # END PROCUREYE RELEASE 43.0 DEV
 
+
+# ============================================================
+# PROCUREYE RELEASE 44.0 DEV — SCENARIO ENGINE
+# ============================================================
+
+def build_scenario_engine(
+    predictive,
+    brent,
+    wti,
+    driver_report,
+    correlation_report,
+    risk
+):
+    import math
+
+    def num(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def price_band(price, volatility, scenario):
+
+        if not price or price <= 0:
+            return "N/A"
+
+        volatility = max(
+            10,
+            min(120, volatility)
+        )
+
+        sigma = (
+            volatility / 100
+            / math.sqrt(252)
+            * math.sqrt(3)
+        )
+
+        sigma = max(
+            0.012,
+            min(0.10, sigma)
+        )
+
+        if scenario == "BULL":
+
+            low = price * (
+                1 + sigma * 0.30
+            )
+
+            high = price * (
+                1 + sigma
+            )
+
+        elif scenario == "BEAR":
+
+            low = price * (
+                1 - sigma
+            )
+
+            high = price * (
+                1 - sigma * 0.30
+            )
+
+        else:
+
+            low = price * (
+                1 - sigma * 0.30
+            )
+
+            high = price * (
+                1 + sigma * 0.30
+            )
+
+        return f"${low:.2f} - ${high:.2f}"
+
+
+    brent_price = num(
+        brent.get("price")
+        if isinstance(brent, dict)
+        else None
+    )
+
+    wti_price = num(
+        wti.get("price")
+        if isinstance(wti, dict)
+        else None
+    )
+
+    brent_vol = num(
+        brent.get("volatility", 40)
+        if isinstance(brent, dict)
+        else 40,
+        40
+    )
+
+    wti_vol = num(
+        wti.get("volatility", brent_vol)
+        if isinstance(wti, dict)
+        else brent_vol,
+        brent_vol
+    )
+
+    long_p = num(
+        predictive.get("long", 0)
+    )
+
+    wait_p = num(
+        predictive.get("wait", 0)
+    )
+
+    short_p = num(
+        predictive.get("short", 0)
+    )
+
+    dominant_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+    )
+
+    driver_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+    ).upper()
+
+    alignment = int(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+    )
+
+    correlation_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+    ).upper()
+
+    bull_trigger = (
+        "Positive momentum + bullish news + "
+        "increasing driver alignment."
+    )
+
+    bear_trigger = (
+        "Negative momentum + bearish news + "
+        "persistent negative driver alignment."
+    )
+
+    base_trigger = (
+        "Mixed evidence or insufficient "
+        "directional confirmation."
+    )
+
+    if driver_direction == "BULLISH":
+        bull_trigger += (
+            f" Current driver: {dominant_driver}."
+        )
+
+    if driver_direction == "BEARISH":
+        bear_trigger += (
+            f" Current driver: {dominant_driver}."
+        )
+
+    scenarios = pd.DataFrame([
+        {
+            "Scenario": "BULL",
+            "Probability": round(long_p, 1),
+            "Signal": "LONG",
+            "Brent 24-72h": price_band(
+                brent_price,
+                brent_vol,
+                "BULL"
+            ),
+            "WTI 24-72h": price_band(
+                wti_price,
+                wti_vol,
+                "BULL"
+            ),
+            "Trigger": bull_trigger
+        },
+        {
+            "Scenario": "BASE",
+            "Probability": round(wait_p, 1),
+            "Signal": "WAIT",
+            "Brent 24-72h": price_band(
+                brent_price,
+                brent_vol,
+                "BASE"
+            ),
+            "WTI 24-72h": price_band(
+                wti_price,
+                wti_vol,
+                "BASE"
+            ),
+            "Trigger": base_trigger
+        },
+        {
+            "Scenario": "BEAR",
+            "Probability": round(short_p, 1),
+            "Signal": "SHORT",
+            "Brent 24-72h": price_band(
+                brent_price,
+                brent_vol,
+                "BEAR"
+            ),
+            "WTI 24-72h": price_band(
+                wti_price,
+                wti_vol,
+                "BEAR"
+            ),
+            "Trigger": bear_trigger
+        }
+    ])
+
+    scenarios = scenarios.sort_values(
+        "Probability",
+        ascending=False
+    ).reset_index(drop=True)
+
+    leader = scenarios.iloc[0]
+
+    return {
+        "leading_scenario":
+            str(leader["Scenario"]),
+        "leading_signal":
+            str(leader["Signal"]),
+        "probability":
+            float(leader["Probability"]),
+        "dominant_driver":
+            dominant_driver,
+        "driver_direction":
+            driver_direction,
+        "alignment":
+            alignment,
+        "correlation_direction":
+            correlation_direction,
+        "risk":
+            str(risk),
+        "scenarios":
+            scenarios
+    }
+
+
+def render_scenario_engine(report):
+
+    section(
+        "Scenario Engine",
+        "BULL, BASE and BEAR scenarios for the next 24-72 hours"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Leading Scenario",
+            report.get(
+                "leading_scenario",
+                "BASE"
+            )
+        )
+
+    with c2:
+        st.metric(
+            "Expected Signal",
+            report.get(
+                "leading_signal",
+                "WAIT"
+            )
+        )
+
+    with c3:
+        st.metric(
+            "Probability",
+            f"{report.get('probability', 0):.1f}%"
+        )
+
+    with c4:
+        st.metric(
+            "Driver Alignment",
+            f"{report.get('alignment', 0)}%"
+        )
+
+    scenarios = report.get(
+        "scenarios"
+    )
+
+    if (
+        isinstance(scenarios, pd.DataFrame)
+        and not scenarios.empty
+    ):
+
+        st.dataframe(
+            scenarios,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Probability":
+                    st.column_config.ProgressColumn(
+                        "Probability",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    st.info(
+        f"Dominant driver: "
+        f"{report.get('dominant_driver', 'NONE')} · "
+        f"{report.get('driver_direction', 'NEUTRAL')} · "
+        f"Correlation: "
+        f"{report.get('correlation_direction', 'NEUTRAL')}"
+    )
+
+    st.caption(
+        "Probabilities recalculate at every refresh. "
+        "Price bands are volatility-based scenarios, "
+        "not guaranteed targets."
+    )
+
+# END PROCUREYE RELEASE 44.0 DEV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -4422,7 +4749,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 43.0 DEV · Predictive Intelligence
+    <div class="pe-release">Release 44.0 DEV · Scenario Engine
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -5209,6 +5536,19 @@ def run_procureye_dashboard():
     )
 
     render_predictive_intelligence(predictive_intelligence)
+
+    scenario_engine = build_scenario_engine(
+        predictive=predictive_intelligence,
+        brent=brent,
+        wti=wti,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        risk=risk
+    )
+
+    render_scenario_engine(
+        scenario_engine
+    )
 
     record_decision_journal(
         brent=brent,
