@@ -5717,7 +5717,12 @@ def render_learning_statistics(report):
 # RELEASE 47.0 — CENTRAL VISUAL SYSTEM
 # ============================================================
 
-_pe_original_metric = st.metric
+# Release 47.1 KEY FIX
+# Conserva una sola volta la vera funzione Streamlit.
+if not hasattr(st, "_procureye_native_metric"):
+    st._procureye_native_metric = st.metric
+
+_pe_original_metric = st._procureye_native_metric
 _pe_metric_counter = 0
 
 
