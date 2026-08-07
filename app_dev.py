@@ -6011,6 +6011,50 @@ def pe47_semantic_df(frame):
 
 # PROCUREYE 47.2 SEMANTIC HELPER END
 
+
+# PROCUREYE RELEASE 47.6 QUICK NAV START
+
+def pe47_anchor(anchor_id):
+    st.markdown(
+        f'<div id="{anchor_id}" class="pe47-anchor"></div>',
+        unsafe_allow_html=True
+    )
+
+
+def pe47_quick_navigation():
+
+    items = [
+        ("Brief", "brief"),
+        ("Health", "health"),
+        ("Market", "market"),
+        ("Signal", "signal-analysis"),
+        ("News", "news"),
+        ("Drivers", "drivers"),
+        ("Explain", "explain"),
+        ("Predictive", "predictive"),
+        ("Scenarios", "scenarios"),
+        ("Learning", "learning"),
+        ("Journal", "journal"),
+        ("System", "system"),
+    ]
+
+    links = "".join(
+        f'<a class="pe47-nav-button" href="#{anchor}">{label}</a>'
+        for label, anchor in items
+    )
+
+    st.markdown(
+        '<div class="pe47-nav-wrap">'
+        '<div class="pe47-nav-title">QUICK NAVIGATION</div>'
+        '<div class="pe47-nav-grid">'
+        + links +
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+# END PROCUREYE RELEASE 47.6 QUICK NAV
+
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
     page_icon="🛢️",
@@ -6162,7 +6206,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.5.1 VISUAL DEV · Semantic Rendering Fix
+    <div class="pe-release">Release 47.6 VISUAL DEV · Quick Navigation
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6713,6 +6757,8 @@ def run_procureye_dashboard():
         news=signal_news,
     )
 
+    pe47_anchor("brief")
+
     render_daily_market_brief(
         daily_market_brief
     )
@@ -6740,8 +6786,13 @@ def run_procureye_dashboard():
             risk
         )
 
+    pe47_quick_navigation()
+
+    pe47_anchor("health")
 
     render_system_health(brent_df, wti_df, signal_news)
+
+    pe47_anchor("last-refresh")
 
     render_market_delta(
         brent,
@@ -6781,6 +6832,8 @@ def run_procureye_dashboard():
     with c6:
         st.metric("Risk", risk)
 
+    pe47_anchor("market")
+
     section("Market Intelligence", "Brent and WTI interactive history")
 
     left, right = st.columns(2, gap="large")
@@ -6791,6 +6844,8 @@ def run_procureye_dashboard():
     with right:
         render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
 
+
+    pe47_anchor("signal-analysis")
 
     section("Why This Signal?", "Automatic explainable decision summary")
 
@@ -6825,6 +6880,8 @@ def run_procureye_dashboard():
     with w3:
         st.metric("Market Regime", why["regime"])
 
+
+    pe47_anchor("news")
 
     section(
         "Top Market-Moving News",
@@ -6880,6 +6937,8 @@ def run_procureye_dashboard():
                     use_container_width=False
                 )
 
+
+    pe47_anchor("drivers")
 
     section("Market Drivers", "Current directional evidence")
 
@@ -6941,6 +7000,8 @@ def run_procureye_dashboard():
 
     historical_driver_memory = build_historical_driver_memory()
 
+    pe47_anchor("learning")
+
     render_historical_driver_memory(
         historical_driver_memory
     )
@@ -6973,6 +7034,8 @@ def run_procureye_dashboard():
         ranking=market_movers_ranking
     )
 
+    pe47_anchor("explain")
+
     render_explainable_decision_v2(
         explainable_decision_v2
     )
@@ -6989,7 +7052,11 @@ def run_procureye_dashboard():
         confidence_v2=confidence_intelligence_v2
     )
 
-    render_predictive_intelligence(predictive_intelligence)
+    pe47_anchor("predictive")
+
+    render_predictive_intelligence(
+        predictive_intelligence
+    )
 
     scenario_engine = build_scenario_engine(
         predictive=predictive_intelligence,
@@ -6999,6 +7066,8 @@ def run_procureye_dashboard():
         correlation_report=driver_correlation,
         risk=risk
     )
+
+    pe47_anchor("scenarios")
 
     render_scenario_engine(
         scenario_engine
@@ -7061,6 +7130,8 @@ def run_procureye_dashboard():
     )
 
 
+    pe47_anchor("journal")
+
     section(
         "Decision Journal",
         "Recorded market decisions and changes"
@@ -7070,6 +7141,8 @@ def run_procureye_dashboard():
 
 
 
+
+    pe47_anchor("system")
 
     render_confidence_engine(
         confidence_engine
@@ -8237,6 +8310,99 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.5.1 STYLE
+
+
+# PROCUREYE RELEASE 47.6 QUICK NAV STYLE START
+
+st.markdown("""
+<style>
+
+/* Anchor compensation for Streamlit header */
+.pe47-anchor {
+    scroll-margin-top: 90px;
+    height: 1px;
+}
+
+/* Navigation container */
+.pe47-nav-wrap {
+    margin-top: 1rem;
+    margin-bottom: 1.25rem;
+    padding: .8rem .9rem;
+    border: 1px solid rgba(175,194,210,.22);
+    border-radius: 10px;
+    background: rgba(14,28,39,.50);
+}
+
+.pe47-nav-title {
+    color: #91A8B7;
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .10em;
+    margin-bottom: .55rem;
+}
+
+/* Responsive navigation */
+.pe47-nav-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .48rem;
+}
+
+/* White buttons / dark blue text */
+.pe47-nav-button,
+.pe47-nav-button:link,
+.pe47-nav-button:visited {
+    display: inline-block;
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6;
+    border-radius: 7px;
+
+    padding: .43rem .70rem;
+
+    font-size: .78rem;
+    font-weight: 650;
+    line-height: 1.1;
+
+    text-decoration: none !important;
+
+    transition:
+        transform .10s ease,
+        border-color .10s ease;
+}
+
+.pe47-nav-button:hover {
+    color: #0B2D4D !important;
+    border-color: #35A8D4;
+    transform: translateY(-1px);
+    text-decoration: none !important;
+}
+
+.pe47-nav-button:active {
+    transform: translateY(0);
+}
+
+/* Mobile */
+@media (max-width: 760px) {
+
+    .pe47-nav-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .pe47-nav-button {
+        text-align: center;
+        padding: .48rem .35rem;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6 QUICK NAV STYLE
 
 if __name__ == "__main__":
     run_procureye_dashboard()
