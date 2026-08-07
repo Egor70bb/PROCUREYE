@@ -6206,7 +6206,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.1 VISUAL DEV · Quick Navigation + Back to Top
+    <div class="pe-release">Release 47.6.2 VISUAL DEV · Navigation Polish
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -8407,23 +8407,7 @@ st.markdown("""
 # END PROCUREYE RELEASE 47.6 QUICK NAV STYLE
 
 
-# PROCUREYE RELEASE 47.6.1 BACK TO TOP START
 
-st.markdown(
-    """
-    <a
-        href="#procureye-top"
-        class="pe47-back-top"
-        title="Back to Executive Dashboard"
-        aria-label="Back to Executive Dashboard"
-    >
-        ↑
-    </a>
-    """,
-    unsafe_allow_html=True
-)
-
-# END PROCUREYE RELEASE 47.6.1 BACK TO TOP
 
 
 # PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE START
@@ -8512,6 +8496,158 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # END PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE
+
+
+# PROCUREYE RELEASE 47.6.2 BACK TO TOP START
+
+_pe47_top_button = (
+    '<a href="#procureye-top" '
+    'class="pe47-back-top" '
+    'title="Back to Executive Dashboard" '
+    'aria-label="Back to Executive Dashboard">'
+    '↑'
+    '</a>'
+)
+
+st.markdown(
+    _pe47_top_button,
+    unsafe_allow_html=True
+)
+
+# END PROCUREYE RELEASE 47.6.2 BACK TO TOP
+
+
+# PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   QUICK NAVIGATION TITLE
+   ========================================================== */
+
+.pe47-nav-title {
+    color: #EFFF00 !important;
+    font-size: 1.05rem !important;
+    font-weight: 800 !important;
+    letter-spacing: .10em !important;
+
+    margin-top: .10rem !important;
+    margin-bottom: .70rem !important;
+}
+
+
+/* ==========================================================
+   QUICK NAVIGATION BUTTONS
+   ========================================================== */
+
+.pe47-nav-button,
+.pe47-nav-button:link,
+.pe47-nav-button:visited {
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6 !important;
+    border-radius: 7px !important;
+
+    font-weight: 700 !important;
+
+    text-decoration: none !important;
+}
+
+.pe47-nav-button:hover {
+
+    color: #0B2D4D !important;
+    border-color: #EFFF00 !important;
+
+    text-decoration: none !important;
+}
+
+
+/* ==========================================================
+   FLOATING BACK TO TOP
+   ========================================================== */
+
+.pe47-back-top,
+.pe47-back-top:link,
+.pe47-back-top:visited {
+
+    position: fixed !important;
+
+    right: 25px !important;
+    bottom: 25px !important;
+
+    width: 54px !important;
+    height: 54px !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    background: #0B2D4D !important;
+
+    /* GIALLO LIMONE */
+    color: #EFFF00 !important;
+
+    border: 2px solid #EFFF00 !important;
+
+    border-radius: 50% !important;
+
+    font-size: 2rem !important;
+    font-weight: 900 !important;
+
+    line-height: 1 !important;
+
+    text-decoration: none !important;
+
+    box-shadow:
+        0 5px 18px rgba(0,0,0,.32) !important;
+
+    z-index: 999999 !important;
+}
+
+
+.pe47-back-top:hover {
+
+    background: #123B5D !important;
+    color: #EFFF00 !important;
+
+    transform: translateY(-3px);
+
+    text-decoration: none !important;
+}
+
+
+/* Anchor */
+.pe47-anchor {
+    scroll-margin-top: 85px !important;
+}
+
+
+/* Mobile */
+@media (max-width: 760px) {
+
+    .pe47-nav-title {
+        font-size: .92rem !important;
+    }
+
+    .pe47-back-top {
+
+        width: 48px !important;
+        height: 48px !important;
+
+        right: 14px !important;
+        bottom: 18px !important;
+
+        font-size: 1.75rem !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE
 
 if __name__ == "__main__":
     run_procureye_dashboard()
