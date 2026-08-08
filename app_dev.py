@@ -5056,6 +5056,269 @@ def render_driver_forecast(report):
 
 
 # ============================================================
+# PROCUREYE RELEASE 47.6.5.2 DEV
+# PERSISTENT OUTCOME MEMORY — GITHUB GIST
+# ============================================================
+
+PREDICTION_HISTORY_FILE = Path(
+    "/tmp/procureye_prediction_history.csv"
+)
+
+
+def _prediction_gist_settings():
+    try:
+        token = str(
+            st.secrets["GITHUB_GIST_TOKEN"]
+        ).strip()
+        gist_id = str(
+            st.secrets["GITHUB_GIST_ID"]
+        ).strip()
+        filename = str(
+            st.secrets[
+                "GITHUB_GIST_FILENAME"
+            ]
+        ).strip()
+    except Exception:
+        return None
+
+    if not token or not gist_id or not filename:
+        return None
+
+    return {
+        "token": token,
+        "gist_id": gist_id,
+        "filename": filename,
+    }
+
+
+def _prediction_gist_headers(token):
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "PROCUREYE-Persistent-Memory",
+    }
+
+
+def _validate_prediction_history(frame):
+    required = {
+        "timestamp_utc",
+        "prediction",
+        "brent",
+        "wti",
+    }
+
+    return (
+        isinstance(frame, pd.DataFrame)
+        and required.issubset(frame.columns)
+    )
+
+
+def load_prediction_history_from_gist():
+    from io import StringIO
+
+    settings = _prediction_gist_settings()
+
+    if settings is None:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Gist secrets unavailable",
+        }
+
+    url = (
+        "https://api.github.com/gists/"
+        + settings["gist_id"]
+    )
+
+    try:
+        response = requests.get(
+            url,
+            headers=_prediction_gist_headers(
+                settings["token"]
+            ),
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        gist_file = (
+            response.json()
+            .get("files", {})
+            .get(settings["filename"])
+        )
+
+        if not gist_file:
+            raise RuntimeError(
+                "Prediction-history file missing in Gist"
+            )
+
+        content = gist_file.get("content", "")
+
+        if gist_file.get("truncated"):
+            raw_url = gist_file.get("raw_url", "")
+
+            if not raw_url:
+                raise RuntimeError(
+                    "Truncated Gist without raw URL"
+                )
+
+            raw_response = requests.get(
+                raw_url,
+                headers=_prediction_gist_headers(
+                    settings["token"]
+                ),
+                timeout=20,
+            )
+            raw_response.raise_for_status()
+            content = raw_response.text
+
+        frame = pd.read_csv(StringIO(content))
+
+        if not _validate_prediction_history(frame):
+            raise RuntimeError(
+                "Invalid prediction-history schema"
+            )
+
+        temporary = PREDICTION_HISTORY_FILE.with_suffix(
+            ".download.tmp"
+        )
+        temporary.write_text(
+            content,
+            encoding="utf-8"
+        )
+        temporary.replace(PREDICTION_HISTORY_FILE)
+
+        return {
+            "ok": True,
+            "mode": "PERSISTENT",
+            "rows": len(frame),
+            "message": "GitHub Gist loaded",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": (
+                "Gist read failed: "
+                + type(error).__name__
+            ),
+        }
+
+
+def save_prediction_history_to_gist():
+    from io import StringIO
+
+    settings = _prediction_gist_settings()
+
+    if settings is None:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Gist secrets unavailable",
+        }
+
+    if not PREDICTION_HISTORY_FILE.exists():
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Local cache unavailable",
+        }
+
+    try:
+        content = PREDICTION_HISTORY_FILE.read_text(
+            encoding="utf-8"
+        )
+
+        frame = pd.read_csv(StringIO(content))
+
+        if not _validate_prediction_history(frame):
+            raise RuntimeError(
+                "Invalid local prediction-history schema"
+            )
+
+        url = (
+            "https://api.github.com/gists/"
+            + settings["gist_id"]
+        )
+
+        payload = {
+            "files": {
+                settings["filename"]: {
+                    "content": content
+                }
+            }
+        }
+
+        response = requests.patch(
+            url,
+            headers=_prediction_gist_headers(
+                settings["token"]
+            ),
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        return {
+            "ok": True,
+            "mode": "PERSISTENT",
+            "rows": len(frame),
+            "message": "GitHub Gist synchronized",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": (
+                "Gist write failed: "
+                + type(error).__name__
+            ),
+        }
+
+
+def render_persistent_outcome_status(
+    load_status,
+    save_status
+):
+    load_ok = bool(load_status.get("ok"))
+    save_ok = bool(save_status.get("ok"))
+    save_skipped = bool(
+        save_status.get("skipped")
+    )
+
+    if load_ok and (save_ok or save_skipped):
+        rows = max(
+            int(load_status.get("rows", 0)),
+            int(save_status.get("rows", 0)),
+        )
+
+        st.success(
+            "Persistent Outcome Memory: ONLINE · "
+            f"GitHub Gist synchronized · {rows} row(s)"
+        )
+    else:
+        details = " · ".join([
+            str(load_status.get("message", "")),
+            str(save_status.get("message", "")),
+        ]).strip(" ·")
+
+        st.warning(
+            "Persistent Outcome Memory: FALLBACK · "
+            + details
+        )
+
+
+# END PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME MEMORY
+
+
+# ============================================================
 # PROCUREYE RELEASE 46.0 DEV — PREDICTION ARCHIVE
 # ============================================================
 
@@ -5075,9 +5338,7 @@ def record_prediction_archive(
     from pathlib import Path
     from datetime import datetime, timezone
 
-    file = Path(
-        "/tmp/procureye_prediction_history.csv"
-    )
+    file = PREDICTION_HISTORY_FILE
 
     now = datetime.now(timezone.utc)
 
@@ -5280,7 +5541,7 @@ def validate_prediction_outcomes(
     from pathlib import Path
     from datetime import datetime, timezone
 
-    file = Path("/tmp/procureye_prediction_history.csv")
+    file = PREDICTION_HISTORY_FILE
 
     result = {
         "validated_now": 0,
@@ -5539,9 +5800,7 @@ def build_learning_statistics():
 
     from pathlib import Path
 
-    file = Path(
-        "/tmp/procureye_prediction_history.csv"
-    )
+    file = PREDICTION_HISTORY_FILE
 
     empty = {
         "predictions": 0,
@@ -6323,7 +6582,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.5.1 DEV
+    <div class="pe-release">Release 47.6.5.2 DEV
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -7221,6 +7480,10 @@ def run_procureye_dashboard():
 
     render_driver_forecast(driver_forecast)
 
+    persistent_load_status = (
+        load_prediction_history_from_gist()
+    )
+
     prediction_archive_status = record_prediction_archive(
         predictive=predictive_intelligence,
         scenario=scenario_engine,
@@ -7241,7 +7504,61 @@ def run_procureye_dashboard():
         minimum_age_hours=24
     )
 
+    memory_changed = (
+        bool(
+            prediction_archive_status.get(
+                "stored",
+                False
+            )
+        )
+        or int(
+            outcome_validation.get(
+                "validated_now",
+                0
+            )
+        ) > 0
+    )
+
+    if persistent_load_status.get("ok"):
+        if memory_changed:
+            persistent_save_status = (
+                save_prediction_history_to_gist()
+            )
+        else:
+            persistent_save_status = {
+                "ok": True,
+                "skipped": True,
+                "mode": "PERSISTENT",
+                "rows": int(
+                    prediction_archive_status.get(
+                        "rows",
+                        0
+                    )
+                ),
+                "message": "No remote write required",
+            }
+    else:
+        persistent_save_status = {
+            "ok": False,
+            "skipped": True,
+            "mode": "FALLBACK",
+            "rows": int(
+                prediction_archive_status.get(
+                    "rows",
+                    0
+                )
+            ),
+            "message": (
+                "Remote write blocked after failed read"
+            ),
+        }
+
     render_outcome_validation(outcome_validation)
+
+    render_persistent_outcome_status(
+        persistent_load_status,
+        persistent_save_status
+    )
 
     learning_statistics = build_learning_statistics()
 
@@ -8834,3 +9151,7 @@ if __name__ == "__main__":
 
 # PROCUREYE RELEASE 47.6.5.1 HEALTH TIMESTAMP DEV
 # Retrieval-based freshness and real source status.
+
+
+# PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME DEV
+# GitHub Gist persistence with safe local fallback.
