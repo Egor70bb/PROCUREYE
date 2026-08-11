@@ -317,6 +317,16 @@ BEARISH_RULES = {
     "ceasefire": 12,
     "dollar rises": 14,
     "rate hike": 13,
+    "price falls": 22,
+    "prices fall": 22,
+    "falls below": 18,
+    "hits 3-year low": 28,
+    "hits three-year low": 28,
+    "three-year low": 25,
+    "lowers demand forecast": 28,
+    "cuts demand forecast": 28,
+    "demand forecast cut": 26,
+    "reduces demand forecast": 28,
 }
 
 
@@ -339,6 +349,28 @@ OIL_RELEVANCE = {
     "tanker": 9,
     "sanction": 10,
 }
+
+
+CORE_OIL_MARKET_TERMS = (
+    "crude oil",
+    "brent",
+    "wti",
+    "oil price",
+    "oil market",
+    "opec",
+    "crude supply",
+    "crude demand",
+    "crude inventories",
+    "oil inventories",
+    "petroleum market",
+)
+
+
+TITLE_NOISE_PATTERNS = (
+    r"\s+Apple\s+\w+\s+\d+(?:\.\d+)?"
+    r"\s*\([A-Za-z0-9_-]{8,}\)\s*$",
+    r"\s*\([A-Za-z0-9_-]{12,}\)\s*$",
+)
 
 
 def _plain_text(value):
@@ -394,6 +426,14 @@ def _clean_title(entry_title, source):
 
     if title.lower().endswith(suffix.lower()):
         title = title[:-len(suffix)].strip()
+
+    for pattern in TITLE_NOISE_PATTERNS:
+        title = re.sub(
+            pattern,
+            "",
+            title,
+            flags=re.IGNORECASE
+        ).strip()
 
     return title
 
@@ -487,6 +527,10 @@ def _analyse(title, summary, source, published):
     text = f"{title} {summary}".lower()
 
     relevance = _term_score(text, OIL_RELEVANCE)
+    core_oil_relevant = any(
+        term in text
+        for term in CORE_OIL_MARKET_TERMS
+    )
     bullish_score = _term_score(text, BULLISH_RULES)
     bearish_score = _term_score(text, BEARISH_RULES)
     source_quality = _source_score(source)
@@ -552,6 +596,7 @@ def _analyse(title, summary, source, published):
         "Confidence": confidence,
         "Reason": reason,
         "AgeHours": round(age_hours, 1),
+        "CoreOilRelevant": core_oil_relevant,
     }
 
 
@@ -626,7 +671,10 @@ def get_market_movers(limit=3):
                 published=published
             )
 
-            if analysis["Importance"] < 25:
+            if (
+                analysis["Importance"] < 25
+                or not analysis["CoreOilRelevant"]
+            ):
                 continue
 
             rows.append({
@@ -670,14 +718,24 @@ def get_market_movers(limit=3):
 
     frame = pd.DataFrame(rows)
 
+    frame["_DirectionalRank"] = (
+        pd.to_numeric(
+            frame["Impact"],
+            errors="coerce"
+        )
+        .fillna(0)
+        .abs()
+    )
+
     frame = (
         frame.sort_values(
             [
+                "_DirectionalRank",
                 "Importance",
                 "Confidence",
                 "PublishedUTC"
             ],
-            ascending=[False, False, False]
+            ascending=[False, False, False, False]
         )
         .drop_duplicates("Dedup")
     )
@@ -710,11 +768,17 @@ def get_market_movers(limit=3):
                 break
 
     result = pd.DataFrame(selected).drop(
-        columns=["Dedup"],
+        columns=["Dedup", "_DirectionalRank"],
         errors="ignore"
     )
 
-    return result.reset_index(drop=True)
+    result = result.reset_index(drop=True)
+    result.attrs["status"] = "LIVE"
+    result.attrs["retrieved_at"] = (
+        datetime.now(timezone.utc).isoformat()
+    )
+
+    return result
 
 
 # ===== EMBEDDED MODULE: market_drivers.py =====
@@ -1018,64 +1082,119 @@ import streamlit as st
 def render_system_health(brent_df, wti_df, news_df):
     now = datetime.now(timezone.utc)
 
-    def latest_market_time(df):
-        if df is None or df.empty or "Date" not in df.columns:
+    def frame_status(df, is_news=False):
+        if df is None or df.empty:
+            return "UNAVAILABLE"
+
+        if is_news:
+            fallback_news = (
+                len(df) == 1
+                and str(
+                    df.iloc[0].get("Source", "")
+                ).upper() == "PROCUREYE"
+            )
+
+            if fallback_news:
+                return "FALLBACK"
+
+        status = str(
+            df.attrs.get("status", "LIVE")
+        ).upper()
+
+        if status in {
+            "LIVE",
+            "ONLINE",
+            "YFINANCE",
+        }:
+            return "LIVE"
+
+        if status in {
+            "FALLBACK",
+            "LOCAL",
+            "LAST_VALID_SNAPSHOT",
+        }:
+            return "FALLBACK"
+
+        if status in {
+            "UNAVAILABLE",
+            "NONE",
+        }:
+            return "UNAVAILABLE"
+
+        return "LIVE"
+
+    def retrieval_time(df):
+        if df is None or df.empty:
+            return None
+
+        raw = df.attrs.get("retrieved_at")
+
+        if not raw:
             return None
 
         value = pd.to_datetime(
-            df["Date"],
+            raw,
             errors="coerce",
             utc=True
-        ).max()
+        )
 
         if pd.isna(value):
             return None
 
         return value.to_pydatetime()
 
-    def latest_news_time(df):
-        if (
-            df is None
-            or df.empty
-            or "PublishedUTC" not in df.columns
-        ):
-            return None
+    brent_status = frame_status(brent_df)
+    wti_status = frame_status(wti_df)
+    news_status = frame_status(
+        news_df,
+        is_news=True
+    )
 
-        value = pd.to_datetime(
-            df["PublishedUTC"],
-            errors="coerce",
-            utc=True
-        ).max()
+    statuses = [
+        brent_status,
+        wti_status,
+        news_status,
+    ]
 
-        if pd.isna(value):
-            return None
-
-        return value.to_pydatetime()
-
-    brent_time = latest_market_time(brent_df)
-    wti_time = latest_market_time(wti_df)
-    news_time = latest_news_time(news_df)
-
-    valid_times = [
-        value for value in (brent_time, wti_time, news_time)
+    retrieval_times = [
+        value
+        for value in (
+            retrieval_time(brent_df),
+            retrieval_time(wti_df),
+            retrieval_time(news_df),
+        )
         if value is not None
     ]
 
-    freshest = max(valid_times) if valid_times else None
-
-    age_minutes = (
-        max(0, int((now - freshest).total_seconds() / 60))
-        if freshest else None
+    oldest_retrieval = (
+        min(retrieval_times)
+        if retrieval_times
+        else None
     )
 
-    if age_minutes is None:
+    age_minutes = (
+        max(
+            0,
+            int(
+                (
+                    now - oldest_retrieval
+                ).total_seconds() / 60
+            )
+        )
+        if oldest_retrieval
+        else None
+    )
+
+    if "UNAVAILABLE" in statuses:
+        freshness_state = "UNAVAILABLE"
+    elif "FALLBACK" in statuses:
+        freshness_state = "FALLBACK"
+    elif age_minutes is None:
         freshness_state = "UNAVAILABLE"
     elif age_minutes <= 20:
         freshness_state = "LIVE"
-    elif age_minutes <= 90:
-        freshness_state = "STALE"
     else:
-        freshness_state = "FALLBACK"
+        freshness_state = "STALE"
 
     st.markdown("### 🟢 System Health")
 
@@ -1109,41 +1228,39 @@ def render_system_health(brent_df, wti_df, news_df):
             st.cache_data.clear()
             st.rerun()
 
+    def render_source(label, status):
+        if status == "LIVE":
+            st.success(f"{label}: ONLINE")
+        elif status == "FALLBACK":
+            st.warning(f"{label}: FALLBACK")
+        else:
+            st.error(f"{label}: UNAVAILABLE")
+
     s1, s2, s3 = st.columns(3)
 
     with s1:
-        if brent_df is not None and not brent_df.empty:
-            st.success("Brent source: ONLINE")
-        else:
-            st.error("Brent source: UNAVAILABLE")
-
-    with s2:
-        if wti_df is not None and not wti_df.empty:
-            st.success("WTI source: ONLINE")
-        else:
-            st.error("WTI source: UNAVAILABLE")
-
-    with s3:
-        live_news = (
-            news_df is not None
-            and not news_df.empty
-            and not (
-                len(news_df) == 1
-                and str(
-                    news_df.iloc[0].get("Source", "")
-                ).upper() == "PROCUREYE"
-            )
+        render_source(
+            "Brent source",
+            brent_status
         )
 
-        if live_news:
-            st.success("News sources: ONLINE")
-        else:
-            st.warning("News sources: FALLBACK")
+    with s2:
+        render_source(
+            "WTI source",
+            wti_status
+        )
+
+    with s3:
+        render_source(
+            "News sources",
+            news_status
+        )
 
     st.caption(
         "Prices refresh every 5 minutes; "
         "news refresh every 15 minutes."
     )
+
 
 # ===== MAIN APPLICATION =====
 
@@ -4939,6 +5056,269 @@ def render_driver_forecast(report):
 
 
 # ============================================================
+# PROCUREYE Release 47.6.5.2 Production
+# PERSISTENT OUTCOME MEMORY — GITHUB GIST
+# ============================================================
+
+PREDICTION_HISTORY_FILE = Path(
+    "/tmp/procureye_prediction_history.csv"
+)
+
+
+def _prediction_gist_settings():
+    try:
+        token = str(
+            st.secrets["GITHUB_GIST_TOKEN"]
+        ).strip()
+        gist_id = str(
+            st.secrets["GITHUB_GIST_ID"]
+        ).strip()
+        filename = str(
+            st.secrets[
+                "GITHUB_GIST_FILENAME"
+            ]
+        ).strip()
+    except Exception:
+        return None
+
+    if not token or not gist_id or not filename:
+        return None
+
+    return {
+        "token": token,
+        "gist_id": gist_id,
+        "filename": filename,
+    }
+
+
+def _prediction_gist_headers(token):
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "PROCUREYE-Persistent-Memory",
+    }
+
+
+def _validate_prediction_history(frame):
+    required = {
+        "timestamp_utc",
+        "prediction",
+        "brent",
+        "wti",
+    }
+
+    return (
+        isinstance(frame, pd.DataFrame)
+        and required.issubset(frame.columns)
+    )
+
+
+def load_prediction_history_from_gist():
+    from io import StringIO
+
+    settings = _prediction_gist_settings()
+
+    if settings is None:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Gist secrets unavailable",
+        }
+
+    url = (
+        "https://api.github.com/gists/"
+        + settings["gist_id"]
+    )
+
+    try:
+        response = requests.get(
+            url,
+            headers=_prediction_gist_headers(
+                settings["token"]
+            ),
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        gist_file = (
+            response.json()
+            .get("files", {})
+            .get(settings["filename"])
+        )
+
+        if not gist_file:
+            raise RuntimeError(
+                "Prediction-history file missing in Gist"
+            )
+
+        content = gist_file.get("content", "")
+
+        if gist_file.get("truncated"):
+            raw_url = gist_file.get("raw_url", "")
+
+            if not raw_url:
+                raise RuntimeError(
+                    "Truncated Gist without raw URL"
+                )
+
+            raw_response = requests.get(
+                raw_url,
+                headers=_prediction_gist_headers(
+                    settings["token"]
+                ),
+                timeout=20,
+            )
+            raw_response.raise_for_status()
+            content = raw_response.text
+
+        frame = pd.read_csv(StringIO(content))
+
+        if not _validate_prediction_history(frame):
+            raise RuntimeError(
+                "Invalid prediction-history schema"
+            )
+
+        temporary = PREDICTION_HISTORY_FILE.with_suffix(
+            ".download.tmp"
+        )
+        temporary.write_text(
+            content,
+            encoding="utf-8"
+        )
+        temporary.replace(PREDICTION_HISTORY_FILE)
+
+        return {
+            "ok": True,
+            "mode": "PERSISTENT",
+            "rows": len(frame),
+            "message": "GitHub Gist loaded",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": (
+                "Gist read failed: "
+                + type(error).__name__
+            ),
+        }
+
+
+def save_prediction_history_to_gist():
+    from io import StringIO
+
+    settings = _prediction_gist_settings()
+
+    if settings is None:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Gist secrets unavailable",
+        }
+
+    if not PREDICTION_HISTORY_FILE.exists():
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Local cache unavailable",
+        }
+
+    try:
+        content = PREDICTION_HISTORY_FILE.read_text(
+            encoding="utf-8"
+        )
+
+        frame = pd.read_csv(StringIO(content))
+
+        if not _validate_prediction_history(frame):
+            raise RuntimeError(
+                "Invalid local prediction-history schema"
+            )
+
+        url = (
+            "https://api.github.com/gists/"
+            + settings["gist_id"]
+        )
+
+        payload = {
+            "files": {
+                settings["filename"]: {
+                    "content": content
+                }
+            }
+        }
+
+        response = requests.patch(
+            url,
+            headers=_prediction_gist_headers(
+                settings["token"]
+            ),
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        return {
+            "ok": True,
+            "mode": "PERSISTENT",
+            "rows": len(frame),
+            "message": "GitHub Gist synchronized",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": (
+                "Gist write failed: "
+                + type(error).__name__
+            ),
+        }
+
+
+def render_persistent_outcome_status(
+    load_status,
+    save_status
+):
+    load_ok = bool(load_status.get("ok"))
+    save_ok = bool(save_status.get("ok"))
+    save_skipped = bool(
+        save_status.get("skipped")
+    )
+
+    if load_ok and (save_ok or save_skipped):
+        rows = max(
+            int(load_status.get("rows", 0)),
+            int(save_status.get("rows", 0)),
+        )
+
+        st.success(
+            "Persistent Outcome Memory: ONLINE · "
+            f"GitHub Gist synchronized · {rows} row(s)"
+        )
+    else:
+        details = " · ".join([
+            str(load_status.get("message", "")),
+            str(save_status.get("message", "")),
+        ]).strip(" ·")
+
+        st.warning(
+            "Persistent Outcome Memory: FALLBACK · "
+            + details
+        )
+
+
+# END PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME MEMORY
+
+
+# ============================================================
 # PROCUREYE RELEASE 46.0 DEV — PREDICTION ARCHIVE
 # ============================================================
 
@@ -4958,9 +5338,7 @@ def record_prediction_archive(
     from pathlib import Path
     from datetime import datetime, timezone
 
-    file = Path(
-        "/tmp/procureye_prediction_history.csv"
-    )
+    file = PREDICTION_HISTORY_FILE
 
     now = datetime.now(timezone.utc)
 
@@ -5163,7 +5541,7 @@ def validate_prediction_outcomes(
     from pathlib import Path
     from datetime import datetime, timezone
 
-    file = Path("/tmp/procureye_prediction_history.csv")
+    file = PREDICTION_HISTORY_FILE
 
     result = {
         "validated_now": 0,
@@ -5422,9 +5800,7 @@ def build_learning_statistics():
 
     from pathlib import Path
 
-    file = Path(
-        "/tmp/procureye_prediction_history.csv"
-    )
+    file = PREDICTION_HISTORY_FILE
 
     empty = {
         "predictions": 0,
@@ -6206,7 +6582,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.3 · Production
+    <div class="pe-release">Release 47.6.5.2 DEV
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -6453,10 +6829,22 @@ def load_price_series(csv_name, ticker):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_market_data():
-    return (
-        load_price_series("brent.csv", "BZ=F"),
-        load_price_series("wti.csv", "CL=F")
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    brent_data = load_price_series(
+        "brent.csv",
+        "BZ=F"
     )
+    wti_data = load_price_series(
+        "wti.csv",
+        "CL=F"
+    )
+
+    for frame in (brent_data, wti_data):
+        if frame is not None:
+            frame.attrs["retrieved_at"] = retrieved_at
+
+    return brent_data, wti_data
 
 def metrics(df):
     if df.empty:
@@ -6786,7 +7174,7 @@ def run_procureye_dashboard():
 
     with q3:
         st.metric(
-            "Confidence",
+            "Signal Confidence",
             confidence
         )
 
@@ -6837,7 +7225,7 @@ def run_procureye_dashboard():
         st.metric("Market Score", f"{score}/100")
 
     with c5:
-        st.metric("Confidence", confidence)
+        st.metric("Signal Confidence", confidence)
 
     with c6:
         st.metric("Risk", risk)
@@ -7092,6 +7480,10 @@ def run_procureye_dashboard():
 
     render_driver_forecast(driver_forecast)
 
+    persistent_load_status = (
+        load_prediction_history_from_gist()
+    )
+
     prediction_archive_status = record_prediction_archive(
         predictive=predictive_intelligence,
         scenario=scenario_engine,
@@ -7112,7 +7504,61 @@ def run_procureye_dashboard():
         minimum_age_hours=24
     )
 
+    memory_changed = (
+        bool(
+            prediction_archive_status.get(
+                "stored",
+                False
+            )
+        )
+        or int(
+            outcome_validation.get(
+                "validated_now",
+                0
+            )
+        ) > 0
+    )
+
+    if persistent_load_status.get("ok"):
+        if memory_changed:
+            persistent_save_status = (
+                save_prediction_history_to_gist()
+            )
+        else:
+            persistent_save_status = {
+                "ok": True,
+                "skipped": True,
+                "mode": "PERSISTENT",
+                "rows": int(
+                    prediction_archive_status.get(
+                        "rows",
+                        0
+                    )
+                ),
+                "message": "No remote write required",
+            }
+    else:
+        persistent_save_status = {
+            "ok": False,
+            "skipped": True,
+            "mode": "FALLBACK",
+            "rows": int(
+                prediction_archive_status.get(
+                    "rows",
+                    0
+                )
+            ),
+            "message": (
+                "Remote write blocked after failed read"
+            ),
+        }
+
     render_outcome_validation(outcome_validation)
+
+    render_persistent_outcome_status(
+        persistent_load_status,
+        persistent_save_status
+    )
 
     learning_statistics = build_learning_statistics()
 
@@ -8696,3 +9142,23 @@ st.markdown("""
 
 if __name__ == "__main__":
     run_procureye_dashboard()
+
+
+# PROCUREYE RELEASE 47.6.5 NEWS QUALITY DEV
+# Oil relevance, bearish classification, title cleaning,
+# directional ranking and confidence-label clarity.
+
+
+# PROCUREYE RELEASE 47.6.5.1 HEALTH TIMESTAMP DEV
+# Retrieval-based freshness and real source status.
+
+
+# PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME DEV
+# GitHub Gist persistence with safe local fallback.
+
+
+# ================================================================
+# PROCUREYE RELEASE 47.6.5.2 PRODUCTION
+# Promoted from validated DEV release.
+# Persistent Outcome Memory enabled through GitHub Gist.
+# ================================================================
