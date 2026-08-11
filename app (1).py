@@ -317,6 +317,16 @@ BEARISH_RULES = {
     "ceasefire": 12,
     "dollar rises": 14,
     "rate hike": 13,
+    "price falls": 22,
+    "prices fall": 22,
+    "falls below": 18,
+    "hits 3-year low": 28,
+    "hits three-year low": 28,
+    "three-year low": 25,
+    "lowers demand forecast": 28,
+    "cuts demand forecast": 28,
+    "demand forecast cut": 26,
+    "reduces demand forecast": 28,
 }
 
 
@@ -339,6 +349,28 @@ OIL_RELEVANCE = {
     "tanker": 9,
     "sanction": 10,
 }
+
+
+CORE_OIL_MARKET_TERMS = (
+    "crude oil",
+    "brent",
+    "wti",
+    "oil price",
+    "oil market",
+    "opec",
+    "crude supply",
+    "crude demand",
+    "crude inventories",
+    "oil inventories",
+    "petroleum market",
+)
+
+
+TITLE_NOISE_PATTERNS = (
+    r"\s+Apple\s+\w+\s+\d+(?:\.\d+)?"
+    r"\s*\([A-Za-z0-9_-]{8,}\)\s*$",
+    r"\s*\([A-Za-z0-9_-]{12,}\)\s*$",
+)
 
 
 def _plain_text(value):
@@ -394,6 +426,14 @@ def _clean_title(entry_title, source):
 
     if title.lower().endswith(suffix.lower()):
         title = title[:-len(suffix)].strip()
+
+    for pattern in TITLE_NOISE_PATTERNS:
+        title = re.sub(
+            pattern,
+            "",
+            title,
+            flags=re.IGNORECASE
+        ).strip()
 
     return title
 
@@ -487,6 +527,10 @@ def _analyse(title, summary, source, published):
     text = f"{title} {summary}".lower()
 
     relevance = _term_score(text, OIL_RELEVANCE)
+    core_oil_relevant = any(
+        term in text
+        for term in CORE_OIL_MARKET_TERMS
+    )
     bullish_score = _term_score(text, BULLISH_RULES)
     bearish_score = _term_score(text, BEARISH_RULES)
     source_quality = _source_score(source)
@@ -552,6 +596,7 @@ def _analyse(title, summary, source, published):
         "Confidence": confidence,
         "Reason": reason,
         "AgeHours": round(age_hours, 1),
+        "CoreOilRelevant": core_oil_relevant,
     }
 
 
@@ -626,7 +671,10 @@ def get_market_movers(limit=3):
                 published=published
             )
 
-            if analysis["Importance"] < 25:
+            if (
+                analysis["Importance"] < 25
+                or not analysis["CoreOilRelevant"]
+            ):
                 continue
 
             rows.append({
@@ -670,14 +718,24 @@ def get_market_movers(limit=3):
 
     frame = pd.DataFrame(rows)
 
+    frame["_DirectionalRank"] = (
+        pd.to_numeric(
+            frame["Impact"],
+            errors="coerce"
+        )
+        .fillna(0)
+        .abs()
+    )
+
     frame = (
         frame.sort_values(
             [
+                "_DirectionalRank",
                 "Importance",
                 "Confidence",
                 "PublishedUTC"
             ],
-            ascending=[False, False, False]
+            ascending=[False, False, False, False]
         )
         .drop_duplicates("Dedup")
     )
@@ -710,11 +768,17 @@ def get_market_movers(limit=3):
                 break
 
     result = pd.DataFrame(selected).drop(
-        columns=["Dedup"],
+        columns=["Dedup", "_DirectionalRank"],
         errors="ignore"
     )
 
-    return result.reset_index(drop=True)
+    result = result.reset_index(drop=True)
+    result.attrs["status"] = "LIVE"
+    result.attrs["retrieved_at"] = (
+        datetime.now(timezone.utc).isoformat()
+    )
+
+    return result
 
 
 # ===== EMBEDDED MODULE: market_drivers.py =====
@@ -964,13 +1028,15 @@ def render_market_delta(brent, wti, signal, score, confidence):
 
         with c3:
             if old_signal != current["signal"]:
-                st.metric(
+                pe47_compact_metric(
+                    "pe47_signal_change",
                     "Signal Change",
                     _clean_signal(current["signal"]),
                     f"{_clean_signal(old_signal)} → {_clean_signal(current['signal'])}"
                 )
             else:
-                st.metric(
+                pe47_compact_metric(
+                    "pe47_signal_change",
                     "Signal Change",
                     "UNCHANGED",
                     _clean_signal(current["signal"]),
@@ -1016,64 +1082,119 @@ import streamlit as st
 def render_system_health(brent_df, wti_df, news_df):
     now = datetime.now(timezone.utc)
 
-    def latest_market_time(df):
-        if df is None or df.empty or "Date" not in df.columns:
+    def frame_status(df, is_news=False):
+        if df is None or df.empty:
+            return "UNAVAILABLE"
+
+        if is_news:
+            fallback_news = (
+                len(df) == 1
+                and str(
+                    df.iloc[0].get("Source", "")
+                ).upper() == "PROCUREYE"
+            )
+
+            if fallback_news:
+                return "FALLBACK"
+
+        status = str(
+            df.attrs.get("status", "LIVE")
+        ).upper()
+
+        if status in {
+            "LIVE",
+            "ONLINE",
+            "YFINANCE",
+        }:
+            return "LIVE"
+
+        if status in {
+            "FALLBACK",
+            "LOCAL",
+            "LAST_VALID_SNAPSHOT",
+        }:
+            return "FALLBACK"
+
+        if status in {
+            "UNAVAILABLE",
+            "NONE",
+        }:
+            return "UNAVAILABLE"
+
+        return "LIVE"
+
+    def retrieval_time(df):
+        if df is None or df.empty:
+            return None
+
+        raw = df.attrs.get("retrieved_at")
+
+        if not raw:
             return None
 
         value = pd.to_datetime(
-            df["Date"],
+            raw,
             errors="coerce",
             utc=True
-        ).max()
+        )
 
         if pd.isna(value):
             return None
 
         return value.to_pydatetime()
 
-    def latest_news_time(df):
-        if (
-            df is None
-            or df.empty
-            or "PublishedUTC" not in df.columns
-        ):
-            return None
+    brent_status = frame_status(brent_df)
+    wti_status = frame_status(wti_df)
+    news_status = frame_status(
+        news_df,
+        is_news=True
+    )
 
-        value = pd.to_datetime(
-            df["PublishedUTC"],
-            errors="coerce",
-            utc=True
-        ).max()
+    statuses = [
+        brent_status,
+        wti_status,
+        news_status,
+    ]
 
-        if pd.isna(value):
-            return None
-
-        return value.to_pydatetime()
-
-    brent_time = latest_market_time(brent_df)
-    wti_time = latest_market_time(wti_df)
-    news_time = latest_news_time(news_df)
-
-    valid_times = [
-        value for value in (brent_time, wti_time, news_time)
+    retrieval_times = [
+        value
+        for value in (
+            retrieval_time(brent_df),
+            retrieval_time(wti_df),
+            retrieval_time(news_df),
+        )
         if value is not None
     ]
 
-    freshest = max(valid_times) if valid_times else None
-
-    age_minutes = (
-        max(0, int((now - freshest).total_seconds() / 60))
-        if freshest else None
+    oldest_retrieval = (
+        min(retrieval_times)
+        if retrieval_times
+        else None
     )
 
-    if age_minutes is None:
+    age_minutes = (
+        max(
+            0,
+            int(
+                (
+                    now - oldest_retrieval
+                ).total_seconds() / 60
+            )
+        )
+        if oldest_retrieval
+        else None
+    )
+
+    if "UNAVAILABLE" in statuses:
+        freshness_state = "UNAVAILABLE"
+    elif "FALLBACK" in statuses:
+        freshness_state = "FALLBACK"
+    elif age_minutes is None:
         freshness_state = "UNAVAILABLE"
     elif age_minutes <= 20:
         freshness_state = "LIVE"
-    elif age_minutes <= 90:
-        freshness_state = "STALE"
     else:
-        freshness_state = "FALLBACK"
+        freshness_state = "STALE"
 
     st.markdown("### 🟢 System Health")
 
@@ -1107,41 +1228,39 @@ def render_system_health(brent_df, wti_df, news_df):
             st.cache_data.clear()
             st.rerun()
 
+    def render_source(label, status):
+        if status == "LIVE":
+            st.success(f"{label}: ONLINE")
+        elif status == "FALLBACK":
+            st.warning(f"{label}: FALLBACK")
+        else:
+            st.error(f"{label}: UNAVAILABLE")
+
     s1, s2, s3 = st.columns(3)
 
     with s1:
-        if brent_df is not None and not brent_df.empty:
-            st.success("Brent source: ONLINE")
-        else:
-            st.error("Brent source: UNAVAILABLE")
-
-    with s2:
-        if wti_df is not None and not wti_df.empty:
-            st.success("WTI source: ONLINE")
-        else:
-            st.error("WTI source: UNAVAILABLE")
-
-    with s3:
-        live_news = (
-            news_df is not None
-            and not news_df.empty
-            and not (
-                len(news_df) == 1
-                and str(
-                    news_df.iloc[0].get("Source", "")
-                ).upper() == "PROCUREYE"
-            )
+        render_source(
+            "Brent source",
+            brent_status
         )
 
-        if live_news:
-            st.success("News sources: ONLINE")
-        else:
-            st.warning("News sources: FALLBACK")
+    with s2:
+        render_source(
+            "WTI source",
+            wti_status
+        )
+
+    with s3:
+        render_source(
+            "News sources",
+            news_status
+        )
 
     st.caption(
         "Prices refresh every 5 minutes; "
         "news refresh every 15 minutes."
     )
+
 
 # ===== MAIN APPLICATION =====
 
@@ -1216,9 +1335,9 @@ def render_executive_dashboard(
         )
 
     with c3:
-        st.metric(
+        pe47_status_metric(
             "Signal",
-            str(signal),
+            str(signal)
         )
 
     with c4:
@@ -1248,15 +1367,15 @@ def render_executive_dashboard(
         )
 
     with d2:
-        st.metric(
+        pe47_status_metric(
             "Brent Trend",
-            str(brent.get("trend", "UNKNOWN")),
+            str(brent.get("trend", "UNKNOWN"))
         )
 
     with d3:
-        st.metric(
+        pe47_status_metric(
             "WTI Trend",
-            str(wti.get("trend", "UNKNOWN")),
+            str(wti.get("trend", "UNKNOWN"))
         )
 
     with d4:
@@ -1488,9 +1607,7 @@ def render_decision_journal():
         )
 
     with j2:
-        st.metric(
-            "Latest Signal",
-            str(frame.iloc[0]["Signal"])
+        pe47_status_metric("Latest Signal", str(frame.iloc[0]["Signal"])
         )
 
     with j3:
@@ -1506,7 +1623,7 @@ def render_decision_journal():
         )
 
     st.dataframe(
-        frame.head(20),
+        pe47_semantic_df(frame.head(20)),
         width="stretch",
         hide_index=True
     )
@@ -1731,10 +1848,7 @@ def render_adaptive_news_weight(
         )
 
     with n4:
-        st.metric(
-            "News Direction",
-            adaptive_news["direction"]
-        )
+        pe47_status_metric("News Direction", adaptive_news["direction"])
 
     st.progress(
         int(
@@ -2086,36 +2200,146 @@ def build_daily_market_brief(
 
 
 def render_daily_market_brief(brief):
+
     section(
         "Daily Market Brief",
         "One-minute executive market summary"
     )
 
-    st.markdown(
-        f"""
-**Market structure**  
-{brief["structure"]}
-
-**Momentum**  
-{brief["momentum"]}
-
-**News intelligence**  
-{brief["news"]}
-
-**Decision**  
-{brief["decision"]}
-"""
+    structure = pe47_semantic_inline(
+        brief["structure"]
     )
 
-    st.info(brief["action"])
+    momentum = pe47_semantic_inline(
+        brief["momentum"]
+    )
+
+    news_text = pe47_semantic_inline(
+        brief["news"]
+    )
+
+    decision = pe47_semantic_inline(
+        brief["decision"]
+    )
+
+    html_block = (
+        '<div class="pe47-brief">'
+        
+        '<div class="pe47-brief-title">'
+        'Market structure'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + structure +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'Momentum'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + momentum +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'News intelligence'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + news_text +
+        '</div>'
+
+        '<div class="pe47-brief-title">'
+        'Decision'
+        '</div>'
+        '<div class="pe47-brief-text">'
+        + decision +
+        '</div>'
+
+        '</div>'
+    )
+
+    st.markdown(
+        html_block,
+        unsafe_allow_html=True
+    )
+
+    st.info(
+        brief["action"]
+    )
+
+
+
+def render_driver_intelligence_panel(report):
+    section(
+        "Driver Intelligence",
+        "Structured evidence behind market direction"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Dominant Driver",
+            report.get("dominant_driver", "NONE")
+        )
+
+    with c2:
+        pe47_status_metric(
+            "Direction",
+            report.get("direction", "NEUTRAL")
+        )
+
+    with c3:
+        st.metric(
+            "Strength",
+            f"{int(report.get('strength', 0))}/100"
+        )
+
+    with c4:
+        st.metric(
+            "Confidence",
+            f"{int(report.get('confidence', 0))}%"
+        )
+
+    drivers = report.get("drivers")
+
+    if (
+        isinstance(drivers, pd.DataFrame)
+        and not drivers.empty
+    ):
+        st.dataframe(
+            pe47_semantic_df(drivers),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Strength": st.column_config.ProgressColumn(
+                    "Strength",
+                    min_value=0,
+                    max_value=100,
+                    format="%d"
+                ),
+                "Confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    min_value=0,
+                    max_value=100,
+                    format="%d%%"
+                ),
+            }
+        )
+    else:
+        st.info(
+            "Driver Intelligence awaits live evidence."
+        )
+
+    st.caption(
+        report.get("reason", "")
+    )
 
 
 
 # ============================================================
-# PROCUREYE RELEASE 42.1C — EMBEDDED DRIVER INTELLIGENCE
+# PROCUREYE RELEASE 42.1 DEV — DRIVER INTELLIGENCE
 # ============================================================
 
-def _driver_number(value, default=0.0):
+def _di_number(value, default=0.0):
     try:
         if value is None or pd.isna(value):
             return default
@@ -2124,7 +2348,7 @@ def _driver_number(value, default=0.0):
         return default
 
 
-def _driver_source_quality(source):
+def _di_source_quality(source):
     source = str(source or "").lower()
 
     quality = {
@@ -2190,11 +2414,11 @@ def analyze_driver_intelligence(news):
             item.get("Bias", "NEUTRAL")
         ).upper()
 
-        impact = _driver_number(
+        impact = _di_number(
             item.get("Impact", 0.0)
         )
 
-        confidence = _driver_number(
+        item_confidence = _di_number(
             item.get("Confidence", 50.0),
             50.0
         )
@@ -2209,28 +2433,32 @@ def analyze_driver_intelligence(news):
 
         weighted_score = (
             directional_impact
-            * _driver_source_quality(source_name)
-            * max(0.25, min(1.0, confidence / 100))
+            * _di_source_quality(source_name)
+            * max(
+                0.25,
+                min(1.0, item_confidence / 100)
+            )
         )
 
         evidence.append({
             "Driver": driver,
             "Source": source_name,
             "Score": weighted_score,
-            "Confidence": confidence,
+            "Confidence": item_confidence,
         })
 
-    frame = pd.DataFrame(evidence)
+    evidence_frame = pd.DataFrame(evidence)
 
-    if frame.empty:
+    if evidence_frame.empty:
         return empty
 
     rows = []
 
-    for driver, group in frame.groupby("Driver"):
+    for driver, group in evidence_frame.groupby("Driver"):
         net_score = float(group["Score"].sum())
         evidence_count = int(len(group))
         source_count = int(group["Source"].nunique())
+
         average_confidence = float(
             group["Confidence"].mean()
         )
@@ -2243,18 +2471,22 @@ def analyze_driver_intelligence(news):
             else "NEUTRAL"
         )
 
-        strength = int(min(
-            100,
-            abs(net_score)
-            + evidence_count * 8
-            + source_count * 6
-        ))
+        strength = int(
+            min(
+                100,
+                abs(net_score)
+                + evidence_count * 8
+                + source_count * 6
+            )
+        )
 
-        confidence_score = int(min(
-            98,
-            average_confidence * 0.70
-            + min(28, source_count * 9)
-        ))
+        confidence_score = int(
+            min(
+                98,
+                average_confidence * 0.70
+                + min(28, source_count * 9)
+            )
+        )
 
         rows.append({
             "Driver": driver,
@@ -2309,7 +2541,7 @@ def render_driver_intelligence_panel(report):
         )
 
     with c2:
-        st.metric(
+        pe47_status_metric(
             "Direction",
             report.get("direction", "NEUTRAL")
         )
@@ -2330,7 +2562,7 @@ def render_driver_intelligence_panel(report):
 
     if isinstance(drivers, pd.DataFrame) and not drivers.empty:
         st.dataframe(
-            drivers,
+            pe47_semantic_df(drivers),
             width="stretch",
             hide_index=True,
             column_config={
@@ -2349,11 +2581,3855 @@ def render_driver_intelligence_panel(report):
             }
         )
     else:
-        st.info("Driver Intelligence awaits live evidence.")
+        st.info(
+            "Driver Intelligence awaits live evidence."
+        )
 
     st.caption(report.get("reason", ""))
 
 
+
+
+# PROCUREYE RELEASE 42.2 DEV — MARKET MOVERS RANKING PRO
+
+def build_market_movers_ranking(news, limit=10):
+    columns = [
+        "Rank",
+        "Headline",
+        "Driver",
+        "Direction",
+        "Impact",
+        "Confidence",
+        "Importance",
+        "Source",
+        "Published",
+    ]
+
+    if news is None or news.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame = news.copy()
+
+    defaults = {
+        "Title": "Untitled market event",
+        "Driver": "OIL MARKET",
+        "Bias": "NEUTRAL",
+        "Impact": 0.0,
+        "Confidence": 0.0,
+        "Importance": 0.0,
+        "Source": "UNKNOWN",
+        "Published": "N/A",
+        "AgeHours": 999.0,
+    }
+
+    for column, default in defaults.items():
+        if column not in frame.columns:
+            frame[column] = default
+
+    for column in [
+        "Impact",
+        "Confidence",
+        "Importance",
+        "AgeHours",
+    ]:
+        frame[column] = pd.to_numeric(
+            frame[column],
+            errors="coerce"
+        ).fillna(defaults[column])
+
+    frame["Freshness Score"] = (
+        100 - frame["AgeHours"].clip(0, 100)
+    )
+
+    frame["Ranking Score"] = (
+        frame["Impact"].abs() * 0.40
+        + frame["Confidence"] * 0.25
+        + frame["Importance"] * 0.25
+        + frame["Freshness Score"] * 0.10
+    ).clip(0, 100)
+
+    frame["Direction"] = (
+        frame["Bias"]
+        .fillna("NEUTRAL")
+        .astype(str)
+        .str.upper()
+    )
+
+    frame = (
+        frame.sort_values(
+            [
+                "Ranking Score",
+                "Confidence",
+                "Importance",
+            ],
+            ascending=False
+        )
+        .drop_duplicates(
+            subset=["Title"],
+            keep="first"
+        )
+        .head(int(limit))
+        .reset_index(drop=True)
+    )
+
+    frame.insert(
+        0,
+        "Rank",
+        range(1, len(frame) + 1)
+    )
+
+    result = frame.rename(
+        columns={
+            "Title": "Headline",
+        }
+    )
+
+    result["Impact"] = result["Impact"].round(1)
+    result["Confidence"] = result["Confidence"].round(0).astype(int)
+    result["Importance"] = result["Importance"].round(1)
+    result["Ranking Score"] = result["Ranking Score"].round(1)
+
+    return result[
+        [
+            "Rank",
+            "Headline",
+            "Driver",
+            "Direction",
+            "Ranking Score",
+            "Impact",
+            "Confidence",
+            "Importance",
+            "Source",
+            "Published",
+        ]
+    ]
+
+
+def render_market_movers_ranking(ranking):
+    section(
+        "Market Movers Ranking Pro",
+        "Top live events ranked by impact, confidence, importance and freshness"
+    )
+
+    if ranking is None or ranking.empty:
+        st.info(
+            "Market Movers Ranking awaits live news evidence."
+        )
+        return
+
+    leader = ranking.iloc[0]
+
+    r1, r2, r3, r4 = st.columns(4)
+
+    with r1:
+        st.metric(
+            "Leading Driver",
+            str(leader["Driver"])
+        )
+
+    with r2:
+        pe47_status_metric(
+            "Direction",
+            str(leader["Direction"])
+        )
+
+    with r3:
+        st.metric(
+            "Ranking Score",
+            f"{float(leader['Ranking Score']):.1f}/100"
+        )
+
+    with r4:
+        st.metric(
+            "Events Ranked",
+            int(len(ranking))
+        )
+
+    st.dataframe(
+        pe47_semantic_df(ranking),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Ranking Score": st.column_config.ProgressColumn(
+                "Ranking Score",
+                min_value=0,
+                max_value=100,
+                format="%.1f"
+            ),
+            "Confidence": st.column_config.ProgressColumn(
+                "Confidence",
+                min_value=0,
+                max_value=100,
+                format="%d%%"
+            ),
+            "Impact": st.column_config.NumberColumn(
+                "Impact",
+                format="%+.1f"
+            ),
+        }
+    )
+
+    st.caption(
+        "Ranking Score = 40% absolute impact + 25% confidence "
+        "+ 25% importance + 10% freshness."
+    )
+
+# END PROCUREYE RELEASE 42.2 DEV
+
+
+
+# PROCUREYE RELEASE 42.3 DEV — DRIVER CORRELATION ENGINE
+
+DRIVER_FAMILIES = {
+    "SUPPLY TIGHTENING": {
+        "OPEC / PRODUCTION",
+        "SUPPLY DISRUPTION",
+        "GEOPOLITICS",
+    },
+    "DEMAND SUPPORT": {
+        "GLOBAL DEMAND",
+        "DOLLAR / FED",
+    },
+    "INVENTORY PRESSURE": {
+        "US INVENTORIES",
+    },
+}
+
+
+def calculate_driver_correlation(driver_report):
+    empty = {
+        "state": "INSUFFICIENT DATA",
+        "direction": "NEUTRAL",
+        "score": 0,
+        "confidence": 0,
+        "alignment": 0,
+        "contradictions": 0,
+        "active_drivers": 0,
+        "summary": "Insufficient structured driver evidence.",
+        "details": pd.DataFrame(
+            columns=[
+                "Driver",
+                "Direction",
+                "Strength",
+                "Confidence",
+                "Contribution",
+            ]
+        ),
+    }
+
+    if not isinstance(driver_report, dict):
+        return empty
+
+    drivers = driver_report.get("drivers")
+
+    if not isinstance(drivers, pd.DataFrame) or drivers.empty:
+        return empty
+
+    frame = drivers.copy()
+
+    required = {
+        "Driver": "OIL MARKET",
+        "Direction": "NEUTRAL",
+        "Strength": 0,
+        "Confidence": 0,
+    }
+
+    for column, default in required.items():
+        if column not in frame.columns:
+            frame[column] = default
+
+    frame["Strength"] = pd.to_numeric(
+        frame["Strength"],
+        errors="coerce"
+    ).fillna(0).clip(0, 100)
+
+    frame["Confidence"] = pd.to_numeric(
+        frame["Confidence"],
+        errors="coerce"
+    ).fillna(0).clip(0, 100)
+
+    frame["Direction"] = (
+        frame["Direction"]
+        .fillna("NEUTRAL")
+        .astype(str)
+        .str.upper()
+    )
+
+    direction_value = {
+        "BULLISH": 1,
+        "BEARISH": -1,
+        "NEUTRAL": 0,
+    }
+
+    frame["Direction Value"] = frame["Direction"].map(
+        direction_value
+    ).fillna(0)
+
+    frame["Contribution"] = (
+        frame["Direction Value"]
+        * frame["Strength"]
+        * frame["Confidence"]
+        / 100
+    ).round(1)
+
+    active = frame[
+        frame["Direction"].isin(["BULLISH", "BEARISH"])
+    ].copy()
+
+    if active.empty:
+        return empty
+
+    bullish = int((active["Direction"] == "BULLISH").sum())
+    bearish = int((active["Direction"] == "BEARISH").sum())
+
+    net_score = float(active["Contribution"].sum())
+    total_absolute = float(active["Contribution"].abs().sum())
+
+    alignment = (
+        abs(net_score) / total_absolute * 100
+        if total_absolute > 0
+        else 0
+    )
+
+    contradictions = min(bullish, bearish)
+
+    average_confidence = float(
+        active["Confidence"].mean()
+    )
+
+    evidence_factor = min(
+        1.0,
+        len(active) / 3
+    )
+
+    confidence = int(min(
+        98,
+        average_confidence * 0.60
+        + alignment * 0.25
+        + evidence_factor * 15
+    ))
+
+    normalized_score = int(max(
+        -100,
+        min(100, net_score)
+    ))
+
+    if normalized_score >= 15:
+        direction = "BULLISH"
+    elif normalized_score <= -15:
+        direction = "BEARISH"
+    else:
+        direction = "NEUTRAL"
+
+    if alignment >= 75 and len(active) >= 2:
+        state = "STRONG ALIGNMENT"
+    elif alignment >= 50:
+        state = "MODERATE ALIGNMENT"
+    elif contradictions > 0:
+        state = "CONFLICTING DRIVERS"
+    else:
+        state = "WEAK ALIGNMENT"
+
+    top = (
+        active.assign(
+            AbsoluteContribution=active["Contribution"].abs()
+        )
+        .sort_values(
+            "AbsoluteContribution",
+            ascending=False
+        )
+        .head(3)
+    )
+
+    driver_names = ", ".join(
+        top["Driver"].astype(str).tolist()
+    )
+
+    summary = (
+        f"{state}: {direction} pressure with "
+        f"{alignment:.0f}% driver alignment. "
+        f"Main contributors: {driver_names}. "
+        f"{contradictions} opposing driver(s) detected."
+    )
+
+    details = frame[
+        [
+            "Driver",
+            "Direction",
+            "Strength",
+            "Confidence",
+            "Contribution",
+        ]
+    ].sort_values(
+        "Contribution",
+        key=lambda values: values.abs(),
+        ascending=False
+    ).reset_index(drop=True)
+
+    return {
+        "state": state,
+        "direction": direction,
+        "score": normalized_score,
+        "confidence": confidence,
+        "alignment": int(round(alignment)),
+        "contradictions": contradictions,
+        "active_drivers": int(len(active)),
+        "summary": summary,
+        "details": details,
+    }
+
+
+def render_driver_correlation(report):
+    section(
+        "Driver Correlation Engine",
+        "Alignment and conflict among current market drivers"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        pe47_compact_metric(
+            "pe47_correlation_state",
+            "Correlation State",
+            report.get("state", "UNKNOWN")
+        )
+
+    with c2:
+        pe47_status_metric(
+            "Combined Direction",
+            report.get("direction", "NEUTRAL")
+        )
+
+    with c3:
+        st.metric(
+            "Driver Alignment",
+            f"{int(report.get('alignment', 0))}%"
+        )
+
+    with c4:
+        st.metric(
+            "Correlation Confidence",
+            f"{int(report.get('confidence', 0))}%"
+        )
+
+    details = report.get("details")
+
+    if isinstance(details, pd.DataFrame) and not details.empty:
+        st.dataframe(
+            pe47_semantic_df(details),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Strength": st.column_config.ProgressColumn(
+                    "Strength",
+                    min_value=0,
+                    max_value=100,
+                    format="%d"
+                ),
+                "Confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    min_value=0,
+                    max_value=100,
+                    format="%d%%"
+                ),
+                "Contribution": st.column_config.NumberColumn(
+                    "Contribution",
+                    format="%+.1f"
+                ),
+            }
+        )
+    else:
+        st.info(
+            "Driver Correlation awaits sufficient evidence."
+        )
+
+    if report.get("state") == "CONFLICTING DRIVERS":
+        st.warning(report.get("summary", ""))
+    else:
+        st.info(report.get("summary", ""))
+
+# END PROCUREYE RELEASE 42.3 DEV
+
+
+
+# PROCUREYE RELEASE 42.4 DEV — HISTORICAL DRIVER MEMORY
+
+def _driver_memory_connection():
+    import sqlite3
+    from pathlib import Path
+
+    database = Path(
+        "/tmp/procureye_driver_memory.db"
+    )
+
+    connection = sqlite3.connect(database)
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS driver_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_utc TEXT NOT NULL,
+            dominant_driver TEXT NOT NULL,
+            driver_direction TEXT NOT NULL,
+            driver_strength INTEGER NOT NULL,
+            driver_confidence INTEGER NOT NULL,
+            correlation_state TEXT NOT NULL,
+            correlation_direction TEXT NOT NULL,
+            correlation_alignment INTEGER NOT NULL,
+            market_signal TEXT NOT NULL,
+            market_score INTEGER NOT NULL,
+            brent REAL,
+            wti REAL
+        )
+        """
+    )
+
+    connection.commit()
+    return connection
+
+
+def _driver_memory_float(value):
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def record_historical_driver_memory(
+    driver_report,
+    correlation_report,
+    signal,
+    score,
+    brent,
+    wti
+):
+    from datetime import datetime, timezone
+
+    if not isinstance(driver_report, dict):
+        return
+
+    if not isinstance(correlation_report, dict):
+        return
+
+    now = datetime.now(timezone.utc)
+
+    dominant_driver = str(
+        driver_report.get("dominant_driver", "NONE")
+    )
+
+    driver_direction = str(
+        driver_report.get("direction", "NEUTRAL")
+    )
+
+    driver_strength = int(
+        driver_report.get("strength", 0)
+    )
+
+    driver_confidence = int(
+        driver_report.get("confidence", 0)
+    )
+
+    correlation_state = str(
+        correlation_report.get("state", "UNKNOWN")
+    )
+
+    correlation_direction = str(
+        correlation_report.get("direction", "NEUTRAL")
+    )
+
+    correlation_alignment = int(
+        correlation_report.get("alignment", 0)
+    )
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+    )
+
+    brent_price = _driver_memory_float(
+        brent.get("price")
+        if isinstance(brent, dict)
+        else None
+    )
+
+    wti_price = _driver_memory_float(
+        wti.get("price")
+        if isinstance(wti, dict)
+        else None
+    )
+
+    connection = _driver_memory_connection()
+
+    previous = connection.execute(
+        """
+        SELECT
+            timestamp_utc,
+            dominant_driver,
+            driver_direction,
+            correlation_state,
+            correlation_direction,
+            market_signal,
+            market_score
+        FROM driver_memory
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    should_insert = previous is None
+
+    if previous is not None:
+        try:
+            previous_time = datetime.fromisoformat(
+                previous[0]
+            )
+            elapsed_minutes = (
+                now - previous_time
+            ).total_seconds() / 60
+        except Exception:
+            elapsed_minutes = 999
+
+        state_changed = any([
+            dominant_driver != str(previous[1]),
+            driver_direction != str(previous[2]),
+            correlation_state != str(previous[3]),
+            correlation_direction != str(previous[4]),
+            clean_signal != str(previous[5]),
+            int(score) != int(previous[6]),
+        ])
+
+        should_insert = (
+            elapsed_minutes >= 15
+            or state_changed
+        )
+
+    if should_insert:
+        connection.execute(
+            """
+            INSERT INTO driver_memory (
+                timestamp_utc,
+                dominant_driver,
+                driver_direction,
+                driver_strength,
+                driver_confidence,
+                correlation_state,
+                correlation_direction,
+                correlation_alignment,
+                market_signal,
+                market_score,
+                brent,
+                wti
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(),
+                dominant_driver,
+                driver_direction,
+                driver_strength,
+                driver_confidence,
+                correlation_state,
+                correlation_direction,
+                correlation_alignment,
+                clean_signal,
+                int(score),
+                brent_price,
+                wti_price,
+            )
+        )
+
+        connection.commit()
+
+    connection.close()
+
+
+def build_historical_driver_memory():
+    connection = _driver_memory_connection()
+
+    history = pd.read_sql_query(
+        """
+        SELECT
+            timestamp_utc AS "Timestamp UTC",
+            dominant_driver AS "Dominant Driver",
+            driver_direction AS "Driver Direction",
+            driver_strength AS "Strength",
+            driver_confidence AS "Driver Confidence",
+            correlation_state AS "Correlation State",
+            correlation_direction AS "Combined Direction",
+            correlation_alignment AS "Alignment",
+            market_signal AS "Signal",
+            market_score AS "Market Score",
+            brent AS "Brent",
+            wti AS "WTI"
+        FROM driver_memory
+        ORDER BY id DESC
+        LIMIT 200
+        """,
+        connection
+    )
+
+    frequency = pd.read_sql_query(
+        """
+        SELECT
+            dominant_driver AS "Driver",
+            COUNT(*) AS "Observations",
+            ROUND(AVG(driver_strength), 1)
+                AS "Average Strength",
+            ROUND(AVG(driver_confidence), 1)
+                AS "Average Confidence",
+            ROUND(AVG(correlation_alignment), 1)
+                AS "Average Alignment"
+        FROM driver_memory
+        GROUP BY dominant_driver
+        ORDER BY Observations DESC
+        LIMIT 10
+        """,
+        connection
+    )
+
+    total = connection.execute(
+        "SELECT COUNT(*) FROM driver_memory"
+    ).fetchone()[0]
+
+    connection.close()
+
+    if history.empty:
+        return {
+            "total": 0,
+            "main_driver": "NONE",
+            "latest_direction": "NEUTRAL",
+            "average_alignment": 0,
+            "frequency": frequency,
+            "history": history,
+        }
+
+    main_driver = str(
+        history["Dominant Driver"]
+        .value_counts()
+        .index[0]
+    )
+
+    latest_direction = str(
+        history.iloc[0]["Combined Direction"]
+    )
+
+    average_alignment = int(round(
+        pd.to_numeric(
+            history["Alignment"],
+            errors="coerce"
+        ).fillna(0).mean()
+    ))
+
+    history["Timestamp UTC"] = pd.to_datetime(
+        history["Timestamp UTC"],
+        errors="coerce",
+        utc=True
+    ).dt.strftime(
+        "%d %b %Y · %H:%M UTC"
+    )
+
+    return {
+        "total": int(total),
+        "main_driver": main_driver,
+        "latest_direction": latest_direction,
+        "average_alignment": average_alignment,
+        "frequency": frequency,
+        "history": history,
+    }
+
+
+def render_historical_driver_memory(memory):
+    section(
+        "Historical Driver Memory",
+        "Observed driver combinations and market states"
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+
+    with m1:
+        st.metric(
+            "Stored Observations",
+            int(memory.get("total", 0))
+        )
+
+    with m2:
+        st.metric(
+            "Historical Main Driver",
+            memory.get("main_driver", "NONE")
+        )
+
+    with m3:
+        pe47_status_metric(
+            "Latest Direction",
+            memory.get(
+                "latest_direction",
+                "NEUTRAL"
+            )
+        )
+
+    with m4:
+        st.metric(
+            "Average Alignment",
+            f"{int(memory.get('average_alignment', 0))}%"
+        )
+
+    frequency = memory.get("frequency")
+
+    if isinstance(frequency, pd.DataFrame) and not frequency.empty:
+        st.dataframe(
+            frequency,
+            width="stretch",
+            hide_index=True
+        )
+
+    history = memory.get("history")
+
+    if isinstance(history, pd.DataFrame) and not history.empty:
+        with st.expander(
+            "Recent driver-memory observations"
+        ):
+            st.dataframe(
+                pe47_semantic_df(history.head(25)),
+                width="stretch",
+                hide_index=True
+            )
+    else:
+        st.info(
+            "Historical baseline created. "
+            "Observations will accumulate after refreshes."
+        )
+
+    st.caption(
+        "DEV memory uses the current Streamlit runtime "
+        "and may reset after a cloud restart."
+    )
+
+# END PROCUREYE RELEASE 42.4 DEV
+
+
+
+# PROCUREYE RELEASE 42.5 DEV — CONFIDENCE INTELLIGENCE V2
+
+def calculate_confidence_intelligence_v2(
+    base_confidence,
+    driver_report,
+    correlation_report,
+    historical_memory,
+    brent,
+    wti,
+    risk
+):
+    def numeric(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    if isinstance(base_confidence, dict):
+        base_score = numeric(
+            base_confidence.get("score", 0)
+        )
+    else:
+        base_score = numeric(base_confidence)
+
+    driver_score = numeric(
+        driver_report.get("confidence", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    driver_strength = numeric(
+        driver_report.get("strength", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    correlation_confidence = numeric(
+        correlation_report.get("confidence", 0)
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    alignment = numeric(
+        correlation_report.get("alignment", 0)
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    contradictions = int(
+        correlation_report.get("contradictions", 0)
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    observations = int(
+        historical_memory.get("total", 0)
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    historical_alignment = numeric(
+        historical_memory.get(
+            "average_alignment",
+            0
+        )
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    brent_trend = str(
+        brent.get("trend", "UNKNOWN")
+        if isinstance(brent, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    wti_trend = str(
+        wti.get("trend", "UNKNOWN")
+        if isinstance(wti, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    trend_agreement = (
+        100
+        if brent_trend == wti_trend
+        and brent_trend not in {
+            "UNKNOWN",
+            "NEUTRAL",
+        }
+        else 55
+        if brent_trend == wti_trend
+        else 25
+    )
+
+    risk_text = str(risk).upper()
+
+    risk_penalty = {
+        "LOW": 0,
+        "MEDIUM": 5,
+        "HIGH": 12,
+    }.get(risk_text, 7)
+
+    contradiction_penalty = min(
+        24,
+        contradictions * 12
+    )
+
+    historical_reliability = min(
+        100,
+        observations * 8
+    )
+
+    components = {
+        "Base Confidence": round(base_score, 1),
+        "Driver Confidence": round(driver_score, 1),
+        "Driver Strength": round(driver_strength, 1),
+        "Correlation Confidence": round(
+            correlation_confidence,
+            1
+        ),
+        "Driver Alignment": round(alignment, 1),
+        "Trend Agreement": round(
+            trend_agreement,
+            1
+        ),
+        "Historical Reliability": round(
+            historical_reliability,
+            1
+        ),
+        "Historical Alignment": round(
+            historical_alignment,
+            1
+        ),
+    }
+
+    weighted_score = (
+        base_score * 0.24
+        + driver_score * 0.15
+        + driver_strength * 0.10
+        + correlation_confidence * 0.15
+        + alignment * 0.14
+        + trend_agreement * 0.10
+        + historical_reliability * 0.07
+        + historical_alignment * 0.05
+        - risk_penalty
+        - contradiction_penalty
+    )
+
+    score = int(
+        max(
+            0,
+            min(100, round(weighted_score))
+        )
+    )
+
+    if score >= 80:
+        level = "VERY HIGH"
+    elif score >= 65:
+        level = "HIGH"
+    elif score >= 50:
+        level = "MEDIUM"
+    elif score >= 35:
+        level = "LOW"
+    else:
+        level = "VERY LOW"
+
+    strongest_component = max(
+        components,
+        key=components.get
+    )
+
+    weakest_component = min(
+        components,
+        key=components.get
+    )
+
+    penalties = []
+
+    if risk_penalty:
+        penalties.append(
+            f"market risk -{risk_penalty}"
+        )
+
+    if contradiction_penalty:
+        penalties.append(
+            f"driver contradiction -{contradiction_penalty}"
+        )
+
+    penalty_text = (
+        ", ".join(penalties)
+        if penalties
+        else "no material penalties"
+    )
+
+    explanation = (
+        f"Confidence {score}% ({level}). "
+        f"Strongest component: {strongest_component} "
+        f"at {components[strongest_component]:.0f}%. "
+        f"Weakest component: {weakest_component} "
+        f"at {components[weakest_component]:.0f}%. "
+        f"Adjustments: {penalty_text}."
+    )
+
+    breakdown = pd.DataFrame([
+        {
+            "Component": component,
+            "Score": value,
+        }
+        for component, value
+        in components.items()
+    ])
+
+    return {
+        "score": score,
+        "level": level,
+        "risk_penalty": risk_penalty,
+        "contradiction_penalty":
+            contradiction_penalty,
+        "observations": observations,
+        "strongest_component":
+            strongest_component,
+        "weakest_component":
+            weakest_component,
+        "explanation": explanation,
+        "breakdown": breakdown,
+    }
+
+
+def render_confidence_intelligence_v2(report):
+    section(
+        "Confidence Intelligence v2",
+        "Multi-factor reliability of the current market decision"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Confidence v2",
+            f"{int(report.get('score', 0))}%"
+        )
+
+    with c2:
+        st.metric(
+            "Confidence Level",
+            report.get("level", "UNKNOWN")
+        )
+
+    with c3:
+        st.metric(
+            "Historical Samples",
+            int(report.get("observations", 0))
+        )
+
+    with c4:
+        total_penalty = (
+            int(report.get("risk_penalty", 0))
+            + int(
+                report.get(
+                    "contradiction_penalty",
+                    0
+                )
+            )
+        )
+
+        st.metric(
+            "Total Penalty",
+            f"-{total_penalty}"
+        )
+
+    breakdown = report.get("breakdown")
+
+    if (
+        isinstance(breakdown, pd.DataFrame)
+        and not breakdown.empty
+    ):
+        st.dataframe(
+            breakdown,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Score":
+                    st.column_config.ProgressColumn(
+                        "Score",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f"
+                    )
+            }
+        )
+
+    st.info(
+        report.get(
+            "explanation",
+            "Confidence explanation unavailable."
+        )
+    )
+
+    st.caption(
+        "Confidence v2 combines market confidence, "
+        "driver evidence, correlation, trend agreement, "
+        "historical memory, risk and contradictions."
+    )
+
+# END PROCUREYE RELEASE 42.5 DEV
+
+
+
+# PROCUREYE RELEASE 42.6 DEV — EXPLAINABLE DECISION INTELLIGENCE 2.0
+
+def build_explainable_decision_v2(
+    signal,
+    score,
+    risk,
+    regime,
+    brent,
+    wti,
+    driver_report,
+    correlation_report,
+    historical_memory,
+    confidence_v2,
+    ranking
+):
+    def numeric(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+    brent_trend = str(
+        brent.get("trend", "UNKNOWN")
+        if isinstance(brent, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    wti_trend = str(
+        wti.get("trend", "UNKNOWN")
+        if isinstance(wti, dict)
+        else "UNKNOWN"
+    ).upper()
+
+    brent_momentum = numeric(
+        brent.get("momentum", 0)
+        if isinstance(brent, dict)
+        else 0
+    )
+
+    wti_momentum = numeric(
+        wti.get("momentum", 0)
+        if isinstance(wti, dict)
+        else 0
+    )
+
+    dominant_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+        if isinstance(driver_report, dict)
+        else "NONE"
+    )
+
+    driver_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(driver_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    driver_strength = int(
+        driver_report.get("strength", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    driver_confidence = int(
+        driver_report.get("confidence", 0)
+        if isinstance(driver_report, dict)
+        else 0
+    )
+
+    correlation_state = str(
+        correlation_report.get(
+            "state",
+            "UNKNOWN"
+        )
+        if isinstance(correlation_report, dict)
+        else "UNKNOWN"
+    )
+
+    combined_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(correlation_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    alignment = int(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    contradictions = int(
+        correlation_report.get(
+            "contradictions",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    historical_samples = int(
+        historical_memory.get("total", 0)
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    historical_driver = str(
+        historical_memory.get(
+            "main_driver",
+            "NONE"
+        )
+        if isinstance(historical_memory, dict)
+        else "NONE"
+    )
+
+    historical_alignment = int(
+        historical_memory.get(
+            "average_alignment",
+            0
+        )
+        if isinstance(historical_memory, dict)
+        else 0
+    )
+
+    confidence_score = int(
+        confidence_v2.get("score", 0)
+        if isinstance(confidence_v2, dict)
+        else 0
+    )
+
+    confidence_level = str(
+        confidence_v2.get(
+            "level",
+            "UNKNOWN"
+        )
+        if isinstance(confidence_v2, dict)
+        else "UNKNOWN"
+    )
+
+    evidence = []
+    risks = []
+    invalidation = []
+
+    if brent_trend not in {"UNKNOWN", "NEUTRAL"}:
+        evidence.append({
+            "Factor": "Brent trend",
+            "Direction": brent_trend,
+            "Evidence": (
+                f"Brent trend is {brent_trend.lower()}."
+            ),
+            "Weight": 18,
+        })
+
+    if wti_trend not in {"UNKNOWN", "NEUTRAL"}:
+        evidence.append({
+            "Factor": "WTI trend",
+            "Direction": wti_trend,
+            "Evidence": (
+                f"WTI trend is {wti_trend.lower()}."
+            ),
+            "Weight": 16,
+        })
+
+    momentum_direction = (
+        "BULLISH"
+        if brent_momentum > 0
+        and wti_momentum > 0
+        else "BEARISH"
+        if brent_momentum < 0
+        and wti_momentum < 0
+        else "MIXED"
+    )
+
+    evidence.append({
+        "Factor": "Momentum",
+        "Direction": momentum_direction,
+        "Evidence": (
+            f"Brent momentum {brent_momentum:+.2f}% · "
+            f"WTI momentum {wti_momentum:+.2f}%."
+        ),
+        "Weight": 18,
+    })
+
+    evidence.append({
+        "Factor": dominant_driver,
+        "Direction": driver_direction,
+        "Evidence": (
+            f"Dominant driver strength {driver_strength}/100 "
+            f"with confidence {driver_confidence}%."
+        ),
+        "Weight": 20,
+    })
+
+    evidence.append({
+        "Factor": "Driver correlation",
+        "Direction": combined_direction,
+        "Evidence": (
+            f"{correlation_state}; alignment {alignment}%."
+        ),
+        "Weight": 16,
+    })
+
+    if historical_samples > 0:
+        evidence.append({
+            "Factor": "Historical memory",
+            "Direction": combined_direction,
+            "Evidence": (
+                f"{historical_samples} observations; "
+                f"main driver {historical_driver}; "
+                f"average alignment {historical_alignment}%."
+            ),
+            "Weight": 12,
+        })
+
+    top_headline = "No ranked headline available."
+    top_direction = "NEUTRAL"
+
+    if (
+        isinstance(ranking, pd.DataFrame)
+        and not ranking.empty
+    ):
+        leader = ranking.iloc[0]
+
+        top_headline = str(
+            leader.get(
+                "Headline",
+                top_headline
+            )
+        )
+
+        top_direction = str(
+            leader.get(
+                "Direction",
+                "NEUTRAL"
+            )
+        ).upper()
+
+        evidence.append({
+            "Factor": "Top market mover",
+            "Direction": top_direction,
+            "Evidence": top_headline,
+            "Weight": 14,
+        })
+
+    if str(risk).upper() == "HIGH":
+        risks.append(
+            "Market volatility and risk conditions are high."
+        )
+
+    if contradictions > 0:
+        risks.append(
+            f"{contradictions} opposing driver(s) reduce signal reliability."
+        )
+
+    if alignment < 50:
+        risks.append(
+            "Driver alignment is below 50%."
+        )
+
+    if confidence_score < 50:
+        risks.append(
+            "Confidence Intelligence v2 is below 50%."
+        )
+
+    if brent_trend != wti_trend:
+        risks.append(
+            "Brent and WTI trends are not fully aligned."
+        )
+
+    if historical_samples < 5:
+        risks.append(
+            "Historical driver memory is still limited."
+        )
+
+    if clean_signal == "LONG":
+        invalidation.extend([
+            "Brent and WTI momentum turning negative.",
+            "Dominant driver changing to BEARISH.",
+            "Driver alignment falling below 45%.",
+        ])
+    elif clean_signal == "SHORT":
+        invalidation.extend([
+            "Brent and WTI momentum turning positive.",
+            "Dominant driver changing to BULLISH.",
+            "Driver alignment falling below 45%.",
+        ])
+    else:
+        invalidation.extend([
+            "Trend, momentum and drivers becoming strongly aligned.",
+            "Confidence Intelligence rising above 65%.",
+        ])
+
+    matching_direction = {
+        "LONG": "BULLISH",
+        "SHORT": "BEARISH",
+        "WAIT": "NEUTRAL",
+    }.get(clean_signal, "NEUTRAL")
+
+    supportive = sum(
+        1
+        for item in evidence
+        if item["Direction"] == matching_direction
+    )
+
+    opposing = sum(
+        1
+        for item in evidence
+        if (
+            item["Direction"]
+            not in {
+                matching_direction,
+                "NEUTRAL",
+                "MIXED",
+                "UNKNOWN",
+            }
+        )
+    )
+
+    weighted_support = sum(
+        item["Weight"]
+        for item in evidence
+        if item["Direction"] == matching_direction
+    )
+
+    weighted_opposition = sum(
+        item["Weight"]
+        for item in evidence
+        if (
+            item["Direction"]
+            not in {
+                matching_direction,
+                "NEUTRAL",
+                "MIXED",
+                "UNKNOWN",
+            }
+        )
+    )
+
+    net_explanation_score = int(
+        max(
+            0,
+            min(
+                100,
+                50
+                + weighted_support
+                - weighted_opposition
+                + (confidence_score - 50) * 0.30
+            )
+        )
+    )
+
+    if clean_signal == "WAIT":
+        executive_summary = (
+            f"PROCUREYE maintains WAIT with Market Score "
+            f"{int(score)}/100. Evidence is not sufficiently "
+            f"aligned for a directional position."
+        )
+    else:
+        executive_summary = (
+            f"PROCUREYE indicates {clean_signal} with Market Score "
+            f"{int(score)}/100 and Confidence v2 "
+            f"{confidence_score}% ({confidence_level}). "
+            f"The dominant driver is {dominant_driver} "
+            f"({driver_direction}) and combined driver alignment "
+            f"is {alignment}%."
+        )
+
+    evidence_table = pd.DataFrame(evidence)
+
+    return {
+        "signal": clean_signal,
+        "executive_summary": executive_summary,
+        "confidence_score": confidence_score,
+        "confidence_level": confidence_level,
+        "explanation_score": net_explanation_score,
+        "supportive_factors": supportive,
+        "opposing_factors": opposing,
+        "evidence": evidence_table,
+        "risks": risks,
+        "invalidation": invalidation,
+        "top_headline": top_headline,
+        "regime": str(regime),
+        "risk": str(risk),
+    }
+
+
+def render_explainable_decision_v2(report):
+    section(
+        "Explainable Decision Intelligence 2.0",
+        "Why the signal exists, what supports it and what could invalidate it"
+    )
+
+    x1, x2, x3, x4 = st.columns(4)
+
+    with x1:
+        pe47_status_metric(
+            "Decision",
+            report.get("signal", "WAIT")
+        )
+
+    with x2:
+        st.metric(
+            "Confidence v2",
+            f"{int(report.get('confidence_score', 0))}%"
+        )
+
+    with x3:
+        st.metric(
+            "Explanation Score",
+            f"{int(report.get('explanation_score', 0))}/100"
+        )
+
+    with x4:
+        st.metric(
+            "Support / Opposition",
+            (
+                f"{int(report.get('supportive_factors', 0))}"
+                f" / "
+                f"{int(report.get('opposing_factors', 0))}"
+            )
+        )
+
+    st.info(
+        report.get(
+            "executive_summary",
+            "Decision explanation unavailable."
+        )
+    )
+
+    evidence = report.get("evidence")
+
+    if (
+        isinstance(evidence, pd.DataFrame)
+        and not evidence.empty
+    ):
+        st.markdown("#### Decision evidence")
+
+        st.dataframe(
+            pe47_semantic_df(evidence),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Weight":
+                    st.column_config.ProgressColumn(
+                        "Weight",
+                        min_value=0,
+                        max_value=25,
+                        format="%d"
+                    )
+            }
+        )
+
+    risks = report.get("risks", [])
+
+    st.markdown("#### Principal risks")
+
+    if risks:
+        for item in risks:
+            st.warning(item)
+    else:
+        st.success(
+            "No material contradiction or reliability warning detected."
+        )
+
+    invalidation = report.get(
+        "invalidation",
+        []
+    )
+
+    with st.expander(
+        "Signal invalidation conditions"
+    ):
+        for item in invalidation:
+            st.markdown(f"- {item}")
+
+    st.caption(
+        "Decision-support explanation only. "
+        "PROCUREYE does not execute trades."
+    )
+
+# END PROCUREYE RELEASE 42.6 DEV
+
+
+
+# PROCUREYE RELEASE 43.0 DEV — PREDICTIVE INTELLIGENCE
+
+def calculate_predictive_intelligence(
+    signal, score, brent, wti, risk,
+    adaptive_news, driver_report,
+    correlation_report, confidence_v2
+):
+    import math
+
+    def n(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    def d(v):
+        v = str(v).upper()
+        if v in ("BULLISH", "LONG"):
+            return 1.0
+        if v in ("BEARISH", "SHORT"):
+            return -1.0
+        return 0.0
+
+    clean_signal = (
+        str(signal)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+    market_score = n(score, 50)
+
+    bt = d(brent.get("trend", "UNKNOWN"))
+    wt = d(wti.get("trend", "UNKNOWN"))
+
+    bm = n(brent.get("momentum", 0))
+    wm = n(wti.get("momentum", 0))
+
+    dd = d(driver_report.get("direction", "NEUTRAL"))
+    ds = n(driver_report.get("strength", 0))
+    dc = n(driver_report.get("confidence", 0))
+
+    cd = d(correlation_report.get("direction", "NEUTRAL"))
+    align = n(correlation_report.get("alignment", 0))
+    cc = n(correlation_report.get("confidence", 0))
+    contradictions = n(correlation_report.get("contradictions", 0))
+
+    news = n(adaptive_news.get("effective_score", 0))
+    confidence = n(confidence_v2.get("score", 0))
+
+    score_p = max(-1, min(1, (market_score - 50) / 50))
+    trend_p = (bt + wt) / 2
+    momentum_p = max(-1, min(1, (bm + wm) / 20))
+    driver_p = dd * ds * dc / 10000
+    correlation_p = cd * align * cc / 10000
+    news_p = max(-1, min(1, news / 50))
+
+    pressure = (
+        score_p * 0.28 +
+        trend_p * 0.19 +
+        momentum_p * 0.17 +
+        driver_p * 0.15 +
+        correlation_p * 0.12 +
+        news_p * 0.09
+    )
+
+    pressure += {
+        "LONG": 0.06,
+        "SHORT": -0.06,
+        "WAIT": 0.0
+    }.get(clean_signal, 0.0)
+
+    risk_p = {
+        "LOW": 0.03,
+        "MEDIUM": 0.08,
+        "HIGH": 0.15
+    }.get(str(risk).upper(), 0.08)
+
+    uncertainty = (
+        ((100 - confidence) / 100) * 0.38 +
+        ((100 - align) / 100) * 0.27 +
+        min(1, contradictions / 3) * 0.20 +
+        risk_p
+    )
+
+    logits = {
+        "LONG": pressure * 3.4,
+        "WAIT": uncertainty * 2.5 - abs(pressure) * 1.4,
+        "SHORT": -pressure * 3.4
+    }
+
+    maximum = max(logits.values())
+
+    raw = {
+        k: math.exp(v - maximum)
+        for k, v in logits.items()
+    }
+
+    total = sum(raw.values())
+
+    probs = {
+        k: 100 * v / total
+        for k, v in raw.items()
+    }
+
+    prediction = max(probs, key=probs.get)
+
+    ordered = sorted(probs.values(), reverse=True)
+    spread = ordered[0] - ordered[1]
+    probability = probs[prediction]
+
+    conviction = (
+        "HIGH"
+        if probability >= 65 and spread >= 15
+        else "MEDIUM"
+        if probability >= 50 and spread >= 8
+        else "LOW"
+    )
+
+    table = pd.DataFrame([
+        {"State": k, "Probability": round(v, 1)}
+        for k, v in probs.items()
+    ]).sort_values(
+        "Probability",
+        ascending=False
+    ).reset_index(drop=True)
+
+    return {
+        "prediction": prediction,
+        "probability": round(probability, 1),
+        "long": round(probs["LONG"], 1),
+        "wait": round(probs["WAIT"], 1),
+        "short": round(probs["SHORT"], 1),
+        "spread": round(spread, 1),
+        "conviction": conviction,
+        "pressure": round(pressure, 3),
+        "uncertainty": round(uncertainty, 3),
+        "table": table
+    }
+
+
+def render_predictive_intelligence(report):
+
+    section(
+        "Predictive Intelligence",
+        "Live probability distribution for LONG, WAIT and SHORT"
+    )
+
+    a, b, c, d = st.columns(4)
+
+    with a:
+        pe47_status_metric(
+            "Prediction",
+            report["prediction"]
+        )
+
+    with b:
+        st.metric(
+            "Leading Probability",
+            f"{report['probability']:.1f}%"
+        )
+
+    with c:
+        st.metric("Conviction", report["conviction"])
+
+    with d:
+        st.metric(
+            "Probability Spread",
+            f"{report['spread']:.1f} pt"
+        )
+
+    st.dataframe(
+        pe47_semantic_df(report["table"]),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Probability": st.column_config.ProgressColumn(
+                "Probability",
+                min_value=0,
+                max_value=100,
+                format="%.1f%%"
+            )
+        }
+    )
+
+    st.info(
+        f"LONG {report['long']:.1f}% · "
+        f"WAIT {report['wait']:.1f}% · "
+        f"SHORT {report['short']:.1f}%"
+    )
+
+    st.caption(
+        "Recalculated on every refresh from market price, "
+        "trend, momentum, current news, drivers, "
+        "correlation, risk and Confidence v2."
+    )
+
+# END PROCUREYE RELEASE 43.0 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 44.0 DEV — SCENARIO ENGINE
+# ============================================================
+
+def build_scenario_engine(
+    predictive,
+    brent,
+    wti,
+    driver_report,
+    correlation_report,
+    risk
+):
+    import math
+
+    def num(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def price_band(price, volatility, scenario):
+
+        if not price or price <= 0:
+            return "N/A"
+
+        volatility = max(
+            10,
+            min(120, volatility)
+        )
+
+        sigma = (
+            volatility / 100
+            / math.sqrt(252)
+            * math.sqrt(3)
+        )
+
+        sigma = max(
+            0.012,
+            min(0.10, sigma)
+        )
+
+        if scenario == "BULL":
+
+            low = price * (
+                1 + sigma * 0.30
+            )
+
+            high = price * (
+                1 + sigma
+            )
+
+        elif scenario == "BEAR":
+
+            low = price * (
+                1 - sigma
+            )
+
+            high = price * (
+                1 - sigma * 0.30
+            )
+
+        else:
+
+            low = price * (
+                1 - sigma * 0.30
+            )
+
+            high = price * (
+                1 + sigma * 0.30
+            )
+
+        return f"${low:.2f} - ${high:.2f}"
+
+
+    brent_price = num(
+        brent.get("price")
+        if isinstance(brent, dict)
+        else None
+    )
+
+    wti_price = num(
+        wti.get("price")
+        if isinstance(wti, dict)
+        else None
+    )
+
+    brent_vol = num(
+        brent.get("volatility", 40)
+        if isinstance(brent, dict)
+        else 40,
+        40
+    )
+
+    wti_vol = num(
+        wti.get("volatility", brent_vol)
+        if isinstance(wti, dict)
+        else brent_vol,
+        brent_vol
+    )
+
+    long_p = num(
+        predictive.get("long", 0)
+    )
+
+    wait_p = num(
+        predictive.get("wait", 0)
+    )
+
+    short_p = num(
+        predictive.get("short", 0)
+    )
+
+    dominant_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+    )
+
+    driver_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+    ).upper()
+
+    alignment = int(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+    )
+
+    correlation_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+    ).upper()
+
+    bull_trigger = (
+        "Positive momentum + bullish news + "
+        "increasing driver alignment."
+    )
+
+    bear_trigger = (
+        "Negative momentum + bearish news + "
+        "persistent negative driver alignment."
+    )
+
+    base_trigger = (
+        "Mixed evidence or insufficient "
+        "directional confirmation."
+    )
+
+    if driver_direction == "BULLISH":
+        bull_trigger += (
+            f" Current driver: {dominant_driver}."
+        )
+
+    if driver_direction == "BEARISH":
+        bear_trigger += (
+            f" Current driver: {dominant_driver}."
+        )
+
+    scenarios = pd.DataFrame([
+        {
+            "Scenario": "BULL",
+            "Probability": round(long_p, 1),
+            "Signal": "LONG",
+            "Brent 24-72h": price_band(
+                brent_price,
+                brent_vol,
+                "BULL"
+            ),
+            "WTI 24-72h": price_band(
+                wti_price,
+                wti_vol,
+                "BULL"
+            ),
+            "Trigger": bull_trigger
+        },
+        {
+            "Scenario": "BASE",
+            "Probability": round(wait_p, 1),
+            "Signal": "WAIT",
+            "Brent 24-72h": price_band(
+                brent_price,
+                brent_vol,
+                "BASE"
+            ),
+            "WTI 24-72h": price_band(
+                wti_price,
+                wti_vol,
+                "BASE"
+            ),
+            "Trigger": base_trigger
+        },
+        {
+            "Scenario": "BEAR",
+            "Probability": round(short_p, 1),
+            "Signal": "SHORT",
+            "Brent 24-72h": price_band(
+                brent_price,
+                brent_vol,
+                "BEAR"
+            ),
+            "WTI 24-72h": price_band(
+                wti_price,
+                wti_vol,
+                "BEAR"
+            ),
+            "Trigger": bear_trigger
+        }
+    ])
+
+    scenarios = scenarios.sort_values(
+        "Probability",
+        ascending=False
+    ).reset_index(drop=True)
+
+    leader = scenarios.iloc[0]
+
+    return {
+        "leading_scenario":
+            str(leader["Scenario"]),
+        "leading_signal":
+            str(leader["Signal"]),
+        "probability":
+            float(leader["Probability"]),
+        "dominant_driver":
+            dominant_driver,
+        "driver_direction":
+            driver_direction,
+        "alignment":
+            alignment,
+        "correlation_direction":
+            correlation_direction,
+        "risk":
+            str(risk),
+        "scenarios":
+            scenarios
+    }
+
+
+def render_scenario_engine(report):
+
+    section(
+        "Scenario Engine",
+        "BULL, BASE and BEAR scenarios for the next 24-72 hours"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        pe47_status_metric(
+            "Leading Scenario",
+            report.get(
+                "leading_scenario",
+                "BASE"
+            )
+        )
+
+    with c2:
+        pe47_status_metric(
+            "Expected Signal",
+            report.get(
+                "leading_signal",
+                "WAIT"
+            )
+        )
+
+    with c3:
+        st.metric(
+            "Probability",
+            f"{report.get('probability', 0):.1f}%"
+        )
+
+    with c4:
+        st.metric(
+            "Driver Alignment",
+            f"{report.get('alignment', 0)}%"
+        )
+
+    scenarios = report.get(
+        "scenarios"
+    )
+
+    if (
+        isinstance(scenarios, pd.DataFrame)
+        and not scenarios.empty
+    ):
+
+        st.dataframe(
+            pe47_semantic_df(scenarios),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Probability":
+                    st.column_config.ProgressColumn(
+                        "Probability",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    st.info(
+        f"Dominant driver: "
+        f"{report.get('dominant_driver', 'NONE')} · "
+        f"{report.get('driver_direction', 'NEUTRAL')} · "
+        f"Correlation: "
+        f"{report.get('correlation_direction', 'NEUTRAL')}"
+    )
+
+    st.caption(
+        "Probabilities recalculate at every refresh. "
+        "Price bands are volatility-based scenarios, "
+        "not guaranteed targets."
+    )
+
+# END PROCUREYE RELEASE 44.0 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 45.0 DEV — DRIVER FORECAST ENGINE
+# ============================================================
+
+def build_driver_forecast(
+    ranking,
+    driver_report,
+    correlation_report,
+    predictive
+):
+    def num(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    empty = {
+        "forecast_driver": "NONE",
+        "direction": "NEUTRAL",
+        "probability": 0.0,
+        "current_driver": "NONE",
+        "horizon": "24-72h",
+        "drivers": pd.DataFrame()
+    }
+
+    if not isinstance(ranking, pd.DataFrame) or ranking.empty:
+        return empty
+
+    frame = ranking.copy()
+
+    defaults = {
+        "Driver": "OIL MARKET",
+        "Direction": "NEUTRAL",
+        "Ranking Score": 0,
+        "Confidence": 50
+    }
+
+    for col, default in defaults.items():
+        if col not in frame.columns:
+            frame[col] = default
+
+    frame["Ranking Score"] = pd.to_numeric(
+        frame["Ranking Score"],
+        errors="coerce"
+    ).fillna(0)
+
+    frame["Confidence"] = pd.to_numeric(
+        frame["Confidence"],
+        errors="coerce"
+    ).fillna(50)
+
+    frame["Direction"] = (
+        frame["Direction"]
+        .astype(str)
+        .str.upper()
+    )
+
+    frame["Forecast Weight"] = (
+        frame["Ranking Score"] * 0.65
+        + frame["Confidence"] * 0.35
+    )
+
+    grouped = (
+        frame.groupby(
+            ["Driver", "Direction"],
+            as_index=False
+        )
+        .agg(
+            Evidence=("Driver", "size"),
+            Forecast_Score=("Forecast Weight", "sum"),
+            Avg_Confidence=("Confidence", "mean")
+        )
+    )
+
+    current_driver = str(
+        driver_report.get(
+            "dominant_driver",
+            "NONE"
+        )
+        if isinstance(driver_report, dict)
+        else "NONE"
+    )
+
+    current_direction = str(
+        driver_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(driver_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    correlation_direction = str(
+        correlation_report.get(
+            "direction",
+            "NEUTRAL"
+        )
+        if isinstance(correlation_report, dict)
+        else "NEUTRAL"
+    ).upper()
+
+    alignment = num(
+        correlation_report.get(
+            "alignment",
+            0
+        )
+        if isinstance(correlation_report, dict)
+        else 0
+    )
+
+    prediction = str(
+        predictive.get(
+            "prediction",
+            "WAIT"
+        )
+        if isinstance(predictive, dict)
+        else "WAIT"
+    ).upper()
+
+    predictive_direction = {
+        "LONG": "BULLISH",
+        "SHORT": "BEARISH",
+        "WAIT": "NEUTRAL"
+    }.get(prediction, "NEUTRAL")
+
+    def bonus(row):
+        value = 0.0
+
+        if str(row["Driver"]) == current_driver:
+            value += 12.0
+
+        if str(row["Direction"]) == current_direction:
+            value += 6.0
+
+        if str(row["Direction"]) == correlation_direction:
+            value += alignment * 0.10
+
+        if str(row["Direction"]) == predictive_direction:
+            value += 8.0
+
+        return value
+
+    grouped["Context Bonus"] = grouped.apply(
+        bonus,
+        axis=1
+    )
+
+    grouped["Forecast Score"] = (
+        grouped["Forecast_Score"]
+        + grouped["Context Bonus"]
+    )
+
+    grouped = grouped.sort_values(
+        ["Forecast Score", "Evidence"],
+        ascending=False
+    ).reset_index(drop=True)
+
+    total = grouped["Forecast Score"].clip(
+        lower=0
+    ).sum()
+
+    if total > 0:
+        grouped["Probability"] = (
+            grouped["Forecast Score"]
+            .clip(lower=0)
+            / total
+            * 100
+        )
+    else:
+        grouped["Probability"] = 0.0
+
+    grouped["Probability"] = grouped[
+        "Probability"
+    ].round(1)
+
+    grouped["Avg Confidence"] = grouped[
+        "Avg_Confidence"
+    ].round(0).astype(int)
+
+    grouped = grouped.rename(
+        columns={
+            "Forecast_Score": "Raw Evidence Score"
+        }
+    )
+
+    leader = grouped.iloc[0]
+
+    return {
+        "forecast_driver":
+            str(leader["Driver"]),
+        "direction":
+            str(leader["Direction"]),
+        "probability":
+            float(leader["Probability"]),
+        "current_driver":
+            current_driver,
+        "horizon":
+            "24-72h",
+        "drivers":
+            grouped[
+                [
+                    "Driver",
+                    "Direction",
+                    "Probability",
+                    "Evidence",
+                    "Avg Confidence"
+                ]
+            ].head(8)
+    }
+
+
+def render_driver_forecast(report):
+
+    section(
+        "Driver Forecast",
+        "Most likely dominant market driver over the next 24-72 hours"
+    )
+
+    f1, f2, f3, f4 = st.columns(4)
+
+    with f1:
+        st.metric(
+            "Likely Next Driver",
+            report.get(
+                "forecast_driver",
+                "NONE"
+            )
+        )
+
+    with f2:
+        pe47_status_metric(
+            "Expected Direction",
+            report.get(
+                "direction",
+                "NEUTRAL"
+            )
+        )
+
+    with f3:
+        st.metric(
+            "Driver Probability",
+            f"{report.get('probability', 0):.1f}%"
+        )
+
+    with f4:
+        st.metric(
+            "Forecast Horizon",
+            report.get(
+                "horizon",
+                "24-72h"
+            )
+        )
+
+    drivers = report.get("drivers")
+
+    if isinstance(drivers, pd.DataFrame) and not drivers.empty:
+        st.dataframe(
+            pe47_semantic_df(drivers),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Probability":
+                    st.column_config.ProgressColumn(
+                        "Probability",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    ),
+                "Avg Confidence":
+                    st.column_config.ProgressColumn(
+                        "Avg Confidence",
+                        min_value=0,
+                        max_value=100,
+                        format="%d%%"
+                    )
+            }
+        )
+
+    st.info(
+        f"Current driver: "
+        f"{report.get('current_driver', 'NONE')} · "
+        f"Likely next dominant driver: "
+        f"{report.get('forecast_driver', 'NONE')}."
+    )
+
+    st.caption(
+        "Forecast recalculates at every refresh from current "
+        "market-moving news, ranking, driver strength, "
+        "correlation and Predictive Intelligence."
+    )
+
+# END PROCUREYE RELEASE 45.0 DEV
+
+
+# ============================================================
+# PROCUREYE Release 47.6.5.2 Production
+# PERSISTENT OUTCOME MEMORY — GITHUB GIST
+# ============================================================
+
+PREDICTION_HISTORY_FILE = Path(
+    "/tmp/procureye_prediction_history.csv"
+)
+
+
+def _prediction_gist_settings():
+    try:
+        token = str(
+            st.secrets["GITHUB_GIST_TOKEN"]
+        ).strip()
+        gist_id = str(
+            st.secrets["GITHUB_GIST_ID"]
+        ).strip()
+        filename = str(
+            st.secrets[
+                "GITHUB_GIST_FILENAME"
+            ]
+        ).strip()
+    except Exception:
+        return None
+
+    if not token or not gist_id or not filename:
+        return None
+
+    return {
+        "token": token,
+        "gist_id": gist_id,
+        "filename": filename,
+    }
+
+
+def _prediction_gist_headers(token):
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "PROCUREYE-Persistent-Memory",
+    }
+
+
+def _validate_prediction_history(frame):
+    required = {
+        "timestamp_utc",
+        "prediction",
+        "brent",
+        "wti",
+    }
+
+    return (
+        isinstance(frame, pd.DataFrame)
+        and required.issubset(frame.columns)
+    )
+
+
+def load_prediction_history_from_gist():
+    from io import StringIO
+
+    settings = _prediction_gist_settings()
+
+    if settings is None:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Gist secrets unavailable",
+        }
+
+    url = (
+        "https://api.github.com/gists/"
+        + settings["gist_id"]
+    )
+
+    try:
+        response = requests.get(
+            url,
+            headers=_prediction_gist_headers(
+                settings["token"]
+            ),
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        gist_file = (
+            response.json()
+            .get("files", {})
+            .get(settings["filename"])
+        )
+
+        if not gist_file:
+            raise RuntimeError(
+                "Prediction-history file missing in Gist"
+            )
+
+        content = gist_file.get("content", "")
+
+        if gist_file.get("truncated"):
+            raw_url = gist_file.get("raw_url", "")
+
+            if not raw_url:
+                raise RuntimeError(
+                    "Truncated Gist without raw URL"
+                )
+
+            raw_response = requests.get(
+                raw_url,
+                headers=_prediction_gist_headers(
+                    settings["token"]
+                ),
+                timeout=20,
+            )
+            raw_response.raise_for_status()
+            content = raw_response.text
+
+        frame = pd.read_csv(StringIO(content))
+
+        if not _validate_prediction_history(frame):
+            raise RuntimeError(
+                "Invalid prediction-history schema"
+            )
+
+        temporary = PREDICTION_HISTORY_FILE.with_suffix(
+            ".download.tmp"
+        )
+        temporary.write_text(
+            content,
+            encoding="utf-8"
+        )
+        temporary.replace(PREDICTION_HISTORY_FILE)
+
+        return {
+            "ok": True,
+            "mode": "PERSISTENT",
+            "rows": len(frame),
+            "message": "GitHub Gist loaded",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": (
+                "Gist read failed: "
+                + type(error).__name__
+            ),
+        }
+
+
+def save_prediction_history_to_gist():
+    from io import StringIO
+
+    settings = _prediction_gist_settings()
+
+    if settings is None:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Gist secrets unavailable",
+        }
+
+    if not PREDICTION_HISTORY_FILE.exists():
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": "Local cache unavailable",
+        }
+
+    try:
+        content = PREDICTION_HISTORY_FILE.read_text(
+            encoding="utf-8"
+        )
+
+        frame = pd.read_csv(StringIO(content))
+
+        if not _validate_prediction_history(frame):
+            raise RuntimeError(
+                "Invalid local prediction-history schema"
+            )
+
+        url = (
+            "https://api.github.com/gists/"
+            + settings["gist_id"]
+        )
+
+        payload = {
+            "files": {
+                settings["filename"]: {
+                    "content": content
+                }
+            }
+        }
+
+        response = requests.patch(
+            url,
+            headers=_prediction_gist_headers(
+                settings["token"]
+            ),
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        return {
+            "ok": True,
+            "mode": "PERSISTENT",
+            "rows": len(frame),
+            "message": "GitHub Gist synchronized",
+        }
+
+    except Exception as error:
+        return {
+            "ok": False,
+            "mode": "FALLBACK",
+            "rows": 0,
+            "message": (
+                "Gist write failed: "
+                + type(error).__name__
+            ),
+        }
+
+
+def render_persistent_outcome_status(
+    load_status,
+    save_status
+):
+    load_ok = bool(load_status.get("ok"))
+    save_ok = bool(save_status.get("ok"))
+    save_skipped = bool(
+        save_status.get("skipped")
+    )
+
+    if load_ok and (save_ok or save_skipped):
+        rows = max(
+            int(load_status.get("rows", 0)),
+            int(save_status.get("rows", 0)),
+        )
+
+        st.success(
+            "Persistent Outcome Memory: ONLINE · "
+            f"GitHub Gist synchronized · {rows} row(s)"
+        )
+    else:
+        details = " · ".join([
+            str(load_status.get("message", "")),
+            str(save_status.get("message", "")),
+        ]).strip(" ·")
+
+        st.warning(
+            "Persistent Outcome Memory: FALLBACK · "
+            + details
+        )
+
+
+# END PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME MEMORY
+
+
+# ============================================================
+# PROCUREYE RELEASE 46.0 DEV — PREDICTION ARCHIVE
+# ============================================================
+
+def record_prediction_archive(
+    predictive,
+    scenario,
+    forecast,
+    driver_report,
+    signal,
+    score,
+    confidence,
+    risk,
+    regime,
+    brent,
+    wti
+):
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    file = PREDICTION_HISTORY_FILE
+
+    now = datetime.now(timezone.utc)
+
+    def num(value, default=0.0):
+        try:
+            if value is None or pd.isna(value):
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def clean(value):
+        return (
+            str(value)
+            .replace("🟢", "")
+            .replace("🔴", "")
+            .replace("🟡", "")
+            .strip()
+            .upper()
+        )
+
+    row = {
+        "timestamp_utc": now.isoformat(),
+        "release": "46.0",
+
+        "signal": clean(signal),
+        "market_score": int(num(score)),
+
+        "confidence_v2": num(
+            confidence.get("score", 0)
+            if isinstance(confidence, dict)
+            else 0
+        ),
+
+        "risk": str(risk),
+        "regime": str(regime),
+
+        "prediction": str(
+            predictive.get("prediction", "WAIT")
+        ),
+
+        "long_probability": num(
+            predictive.get("long", 0)
+        ),
+
+        "wait_probability": num(
+            predictive.get("wait", 0)
+        ),
+
+        "short_probability": num(
+            predictive.get("short", 0)
+        ),
+
+        "prediction_probability": num(
+            predictive.get("probability", 0)
+        ),
+
+        "scenario": str(
+            scenario.get(
+                "leading_scenario",
+                "BASE"
+            )
+        ),
+
+        "scenario_probability": num(
+            scenario.get("probability", 0)
+        ),
+
+        "dominant_driver": str(
+            driver_report.get(
+                "dominant_driver",
+                "NONE"
+            )
+        ),
+
+        "driver_direction": str(
+            driver_report.get(
+                "direction",
+                "NEUTRAL"
+            )
+        ),
+
+        "forecast_driver": str(
+            forecast.get(
+                "forecast_driver",
+                "NONE"
+            )
+        ),
+
+        "forecast_direction": str(
+            forecast.get(
+                "direction",
+                "NEUTRAL"
+            )
+        ),
+
+        "forecast_probability": num(
+            forecast.get(
+                "probability",
+                0
+            )
+        ),
+
+        "brent": num(
+            brent.get("price")
+            if isinstance(brent, dict)
+            else None
+        ),
+
+        "wti": num(
+            wti.get("price")
+            if isinstance(wti, dict)
+            else None
+        )
+    }
+
+    if file.exists():
+        try:
+            history = pd.read_csv(file)
+        except Exception:
+            history = pd.DataFrame()
+    else:
+        history = pd.DataFrame()
+
+    store = True
+
+    if not history.empty:
+
+        try:
+            last = history.iloc[-1]
+
+            last_time = pd.to_datetime(
+                last["timestamp_utc"],
+                utc=True
+            )
+
+            elapsed = (
+                now
+                - last_time.to_pydatetime()
+            ).total_seconds() / 60
+
+            changed = any([
+                str(last.get("prediction"))
+                    != row["prediction"],
+
+                str(last.get("scenario"))
+                    != row["scenario"],
+
+                str(last.get("dominant_driver"))
+                    != row["dominant_driver"],
+
+                str(last.get("forecast_driver"))
+                    != row["forecast_driver"],
+
+                int(num(last.get("market_score")))
+                    != row["market_score"]
+            ])
+
+            store = (
+                elapsed >= 15
+                or changed
+            )
+
+        except Exception:
+            store = True
+
+    if store:
+
+        history = pd.concat(
+            [
+                history,
+                pd.DataFrame([row])
+            ],
+            ignore_index=True
+        )
+
+        history.to_csv(
+            file,
+            index=False
+        )
+
+    return {
+        "stored": store,
+        "rows": len(history),
+        "file": str(file)
+    }
+
+# END PROCUREYE RELEASE 46.0 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 46.1 DEV — OUTCOME VALIDATION
+# ============================================================
+
+def validate_prediction_outcomes(
+    brent,
+    wti,
+    minimum_age_hours=24
+):
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    file = PREDICTION_HISTORY_FILE
+
+    result = {
+        "validated_now": 0,
+        "total_validated": 0,
+        "total_predictions": 0,
+        "accuracy": 0.0,
+        "latest_result": "WAITING"
+    }
+
+    if not file.exists():
+        return result
+
+    try:
+        history = pd.read_csv(file)
+    except Exception:
+        return result
+
+    if history.empty:
+        return result
+
+    result["total_predictions"] = len(history)
+
+    required_columns = {
+        "outcome_validated": False,
+        "outcome_timestamp_utc": "",
+        "brent_return_pct": None,
+        "wti_return_pct": None,
+        "market_return_pct": None,
+        "realized_state": "",
+        "prediction_correct": None,
+        "brier_score": None
+    }
+
+    for col, default in required_columns.items():
+        if col not in history.columns:
+            history[col] = default
+
+    def num(v, default=0.0):
+        try:
+            if v is None or pd.isna(v):
+                return default
+            return float(v)
+        except Exception:
+            return default
+
+    current_brent = num(
+        brent.get("price")
+        if isinstance(brent, dict)
+        else None
+    )
+
+    current_wti = num(
+        wti.get("price")
+        if isinstance(wti, dict)
+        else None
+    )
+
+    if current_brent <= 0 or current_wti <= 0:
+        return result
+
+    now = datetime.now(timezone.utc)
+    validated_now = 0
+
+    for idx, row in history.iterrows():
+
+        already_validated = str(
+            row.get("outcome_validated", False)
+        ).lower() in {"true", "1", "yes"}
+
+        if already_validated:
+            continue
+
+        try:
+            created = pd.to_datetime(
+                row["timestamp_utc"],
+                utc=True
+            ).to_pydatetime()
+        except Exception:
+            continue
+
+        age_hours = (
+            now - created
+        ).total_seconds() / 3600
+
+        if age_hours < minimum_age_hours:
+            continue
+
+        entry_brent = num(row.get("brent"))
+        entry_wti = num(row.get("wti"))
+
+        if entry_brent <= 0 or entry_wti <= 0:
+            continue
+
+        brent_return = (
+            current_brent / entry_brent - 1
+        ) * 100
+
+        wti_return = (
+            current_wti / entry_wti - 1
+        ) * 100
+
+        market_return = (
+            brent_return + wti_return
+        ) / 2
+
+        # Zona neutrale ±0.75%
+        if market_return >= 0.75:
+            realized = "LONG"
+        elif market_return <= -0.75:
+            realized = "SHORT"
+        else:
+            realized = "WAIT"
+
+        prediction = str(
+            row.get("prediction", "WAIT")
+        ).upper()
+
+        correct = prediction == realized
+
+        long_p = num(
+            row.get("long_probability")
+        ) / 100
+
+        wait_p = num(
+            row.get("wait_probability")
+        ) / 100
+
+        short_p = num(
+            row.get("short_probability")
+        ) / 100
+
+        actual = {
+            "LONG": (1, 0, 0),
+            "WAIT": (0, 1, 0),
+            "SHORT": (0, 0, 1)
+        }.get(
+            realized,
+            (0, 1, 0)
+        )
+
+        brier = (
+            (long_p - actual[0]) ** 2
+            + (wait_p - actual[1]) ** 2
+            + (short_p - actual[2]) ** 2
+        ) / 3
+
+        history.at[idx, "outcome_validated"] = True
+        history.at[idx, "outcome_timestamp_utc"] = now.isoformat()
+        history.at[idx, "brent_return_pct"] = round(brent_return, 3)
+        history.at[idx, "wti_return_pct"] = round(wti_return, 3)
+        history.at[idx, "market_return_pct"] = round(market_return, 3)
+        history.at[idx, "realized_state"] = realized
+        history.at[idx, "prediction_correct"] = bool(correct)
+        history.at[idx, "brier_score"] = round(brier, 4)
+
+        validated_now += 1
+
+    history.to_csv(
+        file,
+        index=False
+    )
+
+    validated = history[
+        history["outcome_validated"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ]
+
+    result["validated_now"] = validated_now
+    result["total_validated"] = len(validated)
+
+    if not validated.empty:
+
+        correct_series = (
+            validated["prediction_correct"]
+            .astype(str)
+            .str.lower()
+            .isin(["true", "1", "yes"])
+        )
+
+        result["accuracy"] = round(
+            correct_series.mean() * 100,
+            1
+        )
+
+        last = validated.iloc[-1]
+
+        result["latest_result"] = (
+            f"{last.get('prediction', 'WAIT')} → "
+            f"{last.get('realized_state', 'WAIT')} · "
+            f"{'CORRECT' if str(last.get('prediction_correct')).lower() in ['true','1','yes'] else 'WRONG'}"
+        )
+
+    return result
+
+
+def render_outcome_validation(report):
+
+    section(
+        "Outcome Validation",
+        "Automatic comparison between previous predictions and realized market direction"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Predictions Stored",
+            int(report.get("total_predictions", 0))
+        )
+
+    with c2:
+        st.metric(
+            "Validated",
+            int(report.get("total_validated", 0))
+        )
+
+    with c3:
+        st.metric(
+            "Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+
+    with c4:
+        st.metric(
+            "Validated Now",
+            int(report.get("validated_now", 0))
+        )
+
+    if report.get("total_validated", 0) == 0:
+        st.info(
+            "Outcome validation is active. "
+            "The first prediction becomes eligible after 24 hours."
+        )
+    else:
+        st.info(
+            f"Latest validation: "
+            f"{report.get('latest_result', 'N/A')}"
+        )
+
+    st.caption(
+        "Realized state: LONG above +0.75%, "
+        "SHORT below -0.75%, otherwise WAIT, "
+        "using the average Brent/WTI return after at least 24 hours."
+    )
+
+# END PROCUREYE RELEASE 46.1 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 46.2 DEV — LEARNING STATISTICS
+# ============================================================
+
+def build_learning_statistics():
+
+    from pathlib import Path
+
+    file = PREDICTION_HISTORY_FILE
+
+    empty = {
+        "predictions": 0,
+        "validated": 0,
+        "accuracy": 0.0,
+        "brier": 0.0,
+        "recent_accuracy": 0.0,
+        "by_signal": pd.DataFrame(),
+        "by_driver": pd.DataFrame(),
+        "by_scenario": pd.DataFrame(),
+        "by_confidence": pd.DataFrame()
+    }
+
+    if not file.exists():
+        return empty
+
+    try:
+        history = pd.read_csv(file)
+    except Exception:
+        return empty
+
+    if history.empty:
+        return empty
+
+    result = empty.copy()
+    result["predictions"] = len(history)
+
+    if "outcome_validated" not in history.columns:
+        return result
+
+    valid = history[
+        history["outcome_validated"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    ].copy()
+
+    if valid.empty:
+        return result
+
+    valid["Correct"] = (
+        valid["prediction_correct"]
+        .astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    )
+
+    valid["CorrectInt"] = (
+        valid["Correct"].astype(int)
+    )
+
+    result["validated"] = len(valid)
+
+    result["accuracy"] = round(
+        valid["CorrectInt"].mean() * 100,
+        1
+    )
+
+    if "brier_score" in valid.columns:
+
+        brier = pd.to_numeric(
+            valid["brier_score"],
+            errors="coerce"
+        ).dropna()
+
+        if not brier.empty:
+            result["brier"] = round(
+                brier.mean(),
+                4
+            )
+
+    recent = valid.tail(30)
+
+    if not recent.empty:
+        result["recent_accuracy"] = round(
+            recent["CorrectInt"].mean() * 100,
+            1
+        )
+
+    # Accuracy per LONG / WAIT / SHORT
+    if "prediction" in valid.columns:
+
+        by_signal = (
+            valid.groupby("prediction")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={"prediction": "Signal"}
+            )
+        )
+
+        by_signal["Accuracy"] = (
+            by_signal["Accuracy"] * 100
+        ).round(1)
+
+        result["by_signal"] = by_signal
+
+    # Accuracy per driver
+    if "dominant_driver" in valid.columns:
+
+        by_driver = (
+            valid.groupby("dominant_driver")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={
+                    "dominant_driver": "Driver"
+                }
+            )
+        )
+
+        by_driver["Accuracy"] = (
+            by_driver["Accuracy"] * 100
+        ).round(1)
+
+        result["by_driver"] = (
+            by_driver.sort_values(
+                ["Predictions", "Accuracy"],
+                ascending=False
+            )
+        )
+
+    # Accuracy per Scenario
+    if "scenario" in valid.columns:
+
+        by_scenario = (
+            valid.groupby("scenario")
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+            .rename(
+                columns={"scenario": "Scenario"}
+            )
+        )
+
+        by_scenario["Accuracy"] = (
+            by_scenario["Accuracy"] * 100
+        ).round(1)
+
+        result["by_scenario"] = by_scenario
+
+    # Accuracy per Confidence bucket
+    if "confidence_v2" in valid.columns:
+
+        confidence = pd.to_numeric(
+            valid["confidence_v2"],
+            errors="coerce"
+        )
+
+        valid["Confidence Bucket"] = pd.cut(
+            confidence,
+            bins=[-1, 39, 54, 69, 84, 100],
+            labels=[
+                "VERY LOW",
+                "LOW",
+                "MEDIUM",
+                "HIGH",
+                "VERY HIGH"
+            ]
+        )
+
+        by_confidence = (
+            valid.dropna(
+                subset=["Confidence Bucket"]
+            )
+            .groupby(
+                "Confidence Bucket",
+                observed=True
+            )
+            .agg(
+                Predictions=("CorrectInt", "size"),
+                Correct=("CorrectInt", "sum"),
+                Accuracy=("CorrectInt", "mean")
+            )
+            .reset_index()
+        )
+
+        by_confidence["Accuracy"] = (
+            by_confidence["Accuracy"] * 100
+        ).round(1)
+
+        result["by_confidence"] = (
+            by_confidence
+        )
+
+    return result
+
+
+def render_learning_statistics(report):
+
+    section(
+        "Learning Statistics",
+        "Observed predictive performance — no automatic weight changes"
+    )
+
+    a, b, c, d = st.columns(4)
+
+    with a:
+        st.metric(
+            "Predictions",
+            int(report.get("predictions", 0))
+        )
+
+    with b:
+        st.metric(
+            "Validated",
+            int(report.get("validated", 0))
+        )
+
+    with c:
+        st.metric(
+            "Overall Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+
+    with d:
+        st.metric(
+            "Last 30 Accuracy",
+            f"{report.get('recent_accuracy', 0):.1f}%"
+        )
+
+    if report.get("validated", 0) == 0:
+
+        st.info(
+            "Learning Statistics is active. "
+            "Statistics will appear after the first "
+            "24-hour outcomes are validated."
+        )
+
+        return
+
+    st.metric(
+        "Average Brier Score",
+        f"{report.get('brier', 0):.4f}"
+    )
+
+    by_signal = report.get("by_signal")
+
+    if isinstance(by_signal, pd.DataFrame) and not by_signal.empty:
+
+        st.markdown("#### Accuracy by Signal")
+
+        st.dataframe(
+            pe47_semantic_df(by_signal),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Accuracy":
+                    st.column_config.ProgressColumn(
+                        "Accuracy",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    by_driver = report.get("by_driver")
+
+    if isinstance(by_driver, pd.DataFrame) and not by_driver.empty:
+
+        st.markdown("#### Accuracy by Driver")
+
+        st.dataframe(
+            by_driver.head(10),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Accuracy":
+                    st.column_config.ProgressColumn(
+                        "Accuracy",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%"
+                    )
+            }
+        )
+
+    by_scenario = report.get("by_scenario")
+
+    if isinstance(by_scenario, pd.DataFrame) and not by_scenario.empty:
+
+        st.markdown("#### Accuracy by Scenario")
+
+        st.dataframe(
+            pe47_semantic_df(by_scenario),
+            width="stretch",
+            hide_index=True
+        )
+
+    by_confidence = report.get(
+        "by_confidence"
+    )
+
+    if (
+        isinstance(by_confidence, pd.DataFrame)
+        and not by_confidence.empty
+    ):
+
+        st.markdown(
+            "#### Accuracy by Confidence"
+        )
+
+        st.dataframe(
+            by_confidence,
+            width="stretch",
+            hide_index=True
+        )
+
+    st.caption(
+        "Learning Statistics measures historical performance only. "
+        "Release 46.2 does not modify Predictive Intelligence weights."
+    )
+
+# END PROCUREYE RELEASE 46.2 DEV
+
+
+# ============================================================
+# RELEASE 47.0 — CENTRAL VISUAL SYSTEM
+# ============================================================
+
+# Release 47.1 KEY FIX
+# Conserva una sola volta la vera funzione Streamlit.
+if not hasattr(st, "_procureye_native_metric"):
+    st._procureye_native_metric = st.metric
+
+_pe_original_metric = st._procureye_native_metric
+_pe_metric_counter = 0
+
+
+def _pe_clean_state(value):
+
+    return (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+
+def _pe_visual_metric(
+    label,
+    value,
+    *args,
+    **kwargs
+):
+
+    global _pe_metric_counter
+
+    state = _pe_clean_state(value)
+
+    semantic = None
+
+    if state in ("LONG", "BULLISH"):
+        semantic = "bull"
+
+    elif state in ("SHORT", "BEARISH"):
+        semantic = "bear"
+
+    elif state in ("WAIT", "NEUTRAL"):
+        semantic = "neutral"
+
+    if semantic is None:
+        return _pe_original_metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+    _pe_metric_counter += 1
+
+    with st.container(
+        key=f"pe47_{semantic}_{_pe_metric_counter}"
+    ):
+        return _pe_original_metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+
+# PROCUREYE 47.1: st.metric native preserved
+def pe47_compact_metric(
+    key,
+    label,
+    value,
+    *args,
+    **kwargs
+):
+    # key mantenuta solo come container visuale
+    with st.container(key=key):
+        return st.metric(
+            label,
+            value,
+            *args,
+            **kwargs
+        )
+
+
+
+# PROCUREYE 47.2 SEMANTIC HELPER START
+
+def _pe47_clean_state(value):
+    return (
+        str(value)
+        .replace("🟢", "")
+        .replace("🔴", "")
+        .replace("🟡", "")
+        .strip()
+        .upper()
+    )
+
+
+def _pe47_semantic_class(value):
+
+    clean = _pe47_clean_state(value)
+
+    if clean in (
+        "LONG",
+        "BULLISH",
+        "BULL"
+    ):
+        return "pe47-bull"
+
+    if clean in (
+        "SHORT",
+        "BEARISH",
+        "BEAR"
+    ):
+        return "pe47-bear"
+
+    if clean in (
+        "WAIT",
+        "NEUTRAL",
+        "BASE"
+    ):
+        return "pe47-neutral"
+
+    return "pe47-standard"
+
+
+def pe47_status_metric(
+    label,
+    value,
+    delta=None
+):
+    import html
+
+    clean = _pe47_clean_state(value)
+    css_class = _pe47_semantic_class(clean)
+
+    delta_html = ""
+
+    if delta is not None:
+        delta_html = (
+            '<div class="pe47-status-delta">'
+            + html.escape(str(delta))
+            + '</div>'
+        )
+
+    html_block = (
+        '<div class="pe47-status-card">'
+        '<div class="pe47-status-label">'
+        + html.escape(str(label))
+        + '</div>'
+        '<div class="pe47-status-value '
+        + css_class
+        + '">'
+        + html.escape(clean)
+        + '</div>'
+        + delta_html
+        + '</div>'
+    )
+
+    st.markdown(
+        html_block,
+        unsafe_allow_html=True
+    )
+
+
+
+def pe47_semantic_inline(value):
+
+    import html
+    import re
+
+    text = html.escape(str(value))
+
+    patterns = [
+        (
+            r"\b(LONG|BULLISH|BULL)\b",
+            "pe47-bull"
+        ),
+        (
+            r"\b(SHORT|BEARISH|BEAR)\b",
+            "pe47-bear"
+        ),
+        (
+            r"\b(WAIT|NEUTRAL|BASE)\b",
+            "pe47-neutral"
+        )
+    ]
+
+    for pattern, css_class in patterns:
+
+        text = re.sub(
+            pattern,
+            lambda m:
+                f'<span class="{css_class}">'
+                f'{m.group(0)}</span>',
+            text,
+            flags=re.IGNORECASE
+        )
+
+    return text
+
+
+def pe47_semantic_df(frame):
+
+    if frame is None:
+        return frame
+
+    def semantic_style(value):
+
+        clean = _pe47_clean_state(value)
+
+        if clean in (
+            "LONG",
+            "BULLISH",
+            "BULL"
+        ):
+            return (
+                "color:#22C55E;"
+                "font-weight:700;"
+            )
+
+        if clean in (
+            "SHORT",
+            "BEARISH",
+            "BEAR"
+        ):
+            return (
+                "color:#EF4444;"
+                "font-weight:700;"
+            )
+
+        if clean in (
+            "WAIT",
+            "NEUTRAL",
+            "BASE"
+        ):
+            return (
+                "color:#FACC15;"
+                "font-weight:700;"
+            )
+
+        return ""
+
+    styler = frame.style
+
+    try:
+        return styler.map(
+            semantic_style
+        )
+    except AttributeError:
+        return styler.applymap(
+            semantic_style
+        )
+
+# PROCUREYE 47.2 SEMANTIC HELPER END
+
+
+# PROCUREYE RELEASE 47.6 QUICK NAV START
+
+def pe47_anchor(anchor_id):
+    st.markdown(
+        f'<div id="{anchor_id}" class="pe47-anchor"></div>',
+        unsafe_allow_html=True
+    )
+
+
+def pe47_quick_navigation():
+
+    items = [
+        ("Brief", "brief"),
+        ("Health", "health"),
+        ("Market", "market"),
+        ("Signal", "signal-analysis"),
+        ("News", "news"),
+        ("Drivers", "drivers"),
+        ("Explain", "explain"),
+        ("Predictive", "predictive"),
+        ("Scenarios", "scenarios"),
+        ("Learning", "learning"),
+        ("Journal", "journal"),
+        ("System", "system"),
+    ]
+
+    links = "".join(
+        f'<a class="pe47-nav-button" href="#{anchor}">{label}</a>'
+        for label, anchor in items
+    )
+
+    st.markdown(
+        '<div class="pe47-nav-wrap">'
+        '<div class="pe47-nav-title">QUICK NAVIGATION</div>'
+        '<div class="pe47-nav-grid">'
+        + links +
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+# END PROCUREYE RELEASE 47.6 QUICK NAV
 
 st.set_page_config(
     page_title="PROCUREYE | Oil Market Intelligence",
@@ -2506,7 +6582,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 41.8.1 · Daily Market Brief
+    <div class="pe-release">Release 47.6.5.2 Production
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -2753,10 +6829,22 @@ def load_price_series(csv_name, ticker):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_market_data():
-    return (
-        load_price_series("brent.csv", "BZ=F"),
-        load_price_series("wti.csv", "CL=F")
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+
+    brent_data = load_price_series(
+        "brent.csv",
+        "BZ=F"
     )
+    wti_data = load_price_series(
+        "wti.csv",
+        "CL=F"
+    )
+
+    for frame in (brent_data, wti_data):
+        if frame is not None:
+            frame.attrs["retrieved_at"] = retrieved_at
+
+    return brent_data, wti_data
 
 def metrics(df):
     if df.empty:
@@ -3043,8 +7131,66 @@ def run_procureye_dashboard():
         adaptive_news=adaptive_news
     )
 
-    section("Executive Dashboard", datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC"))
+    pe47_anchor("procureye-top")
+
+    st.markdown(
+        '<div class="pe47-executive-header">'
+        '<div class="pe47-executive-title">EXECUTIVE DASHBOARD</div>'
+        '<div class="pe47-executive-update">'
+        + datetime.now(timezone.utc).strftime("Updated %Y-%m-%d %H:%M UTC")
+        + '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+    daily_market_brief = build_daily_market_brief(
+        brent=brent,
+        wti=wti,
+        signal=signal,
+        score=score,
+        confidence=confidence,
+        risk=risk,
+        regime=regime,
+        adaptive_news=adaptive_news,
+        confidence_engine=confidence_engine,
+        news=signal_news,
+    )
+
+    pe47_anchor("brief")
+
+    render_daily_market_brief(
+        daily_market_brief
+    )
+
+    q1, q2, q3, q4 = st.columns(4)
+
+    with q1:
+        pe47_status_metric("Signal", signal)
+
+    with q2:
+        st.metric(
+            "Market Score",
+            f"{score}/100"
+        )
+
+    with q3:
+        st.metric(
+            "Signal Confidence",
+            confidence
+        )
+
+    with q4:
+        st.metric(
+            "Risk",
+            risk
+        )
+
+    pe47_quick_navigation()
+
+    pe47_anchor("health")
+
     render_system_health(brent_df, wti_df, signal_news)
+
+    pe47_anchor("last-refresh")
 
     render_market_delta(
         brent,
@@ -3073,16 +7219,18 @@ def run_procureye_dashboard():
         )
 
     with c3:
-        st.metric("Signal", signal)
+        pe47_status_metric("Signal", signal)
 
     with c4:
         st.metric("Market Score", f"{score}/100")
 
     with c5:
-        st.metric("Confidence", confidence)
+        st.metric("Signal Confidence", confidence)
 
     with c6:
         st.metric("Risk", risk)
+
+    pe47_anchor("market")
 
     section("Market Intelligence", "Brent and WTI interactive history")
 
@@ -3094,6 +7242,8 @@ def run_procureye_dashboard():
     with right:
         render_professional_chart(wti_df, "WTI Crude Oil", "WTI")
 
+
+    pe47_anchor("signal-analysis")
 
     section("Why This Signal?", "Automatic explainable decision summary")
 
@@ -3129,6 +7279,8 @@ def run_procureye_dashboard():
         st.metric("Market Regime", why["regime"])
 
 
+    pe47_anchor("news")
+
     section(
         "Top Market-Moving News",
         "Three highest-impact live oil-market items"
@@ -3144,6 +7296,7 @@ def run_procureye_dashboard():
         st.rerun()
 
     news = get_market_movers(limit=3)
+
 
     for index, row in news.iterrows():
         icon = (
@@ -3163,7 +7316,7 @@ def run_procureye_dashboard():
                 )
 
             with n2:
-                st.metric(
+                pe47_status_metric(
                     "Expected impact",
                     row["Bias"],
                     f"{row['Impact']:+.1f}"
@@ -3182,6 +7335,8 @@ def run_procureye_dashboard():
                     use_container_width=False
                 )
 
+
+    pe47_anchor("drivers")
 
     section("Market Drivers", "Current directional evidence")
 
@@ -3208,11 +7363,206 @@ def run_procureye_dashboard():
 
 
 
+
+    market_movers_ranking = build_market_movers_ranking(
+        news=news,
+        limit=10
+    )
+
+    render_market_movers_ranking(
+        market_movers_ranking
+    )
+
     driver_intelligence = analyze_driver_intelligence(news)
 
+
+    driver_correlation = calculate_driver_correlation(
+        driver_intelligence
+    )
     render_driver_intelligence_panel(
         driver_intelligence
     )
+
+    render_driver_correlation(
+        driver_correlation
+    )
+
+    record_historical_driver_memory(
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        signal=signal,
+        score=score,
+        brent=brent,
+        wti=wti
+    )
+
+    historical_driver_memory = build_historical_driver_memory()
+
+    pe47_anchor("learning")
+
+    render_historical_driver_memory(
+        historical_driver_memory
+    )
+
+    confidence_intelligence_v2 = calculate_confidence_intelligence_v2(
+        base_confidence=confidence_engine,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        historical_memory=historical_driver_memory,
+        brent=brent,
+        wti=wti,
+        risk=risk
+    )
+
+    render_confidence_intelligence_v2(
+        confidence_intelligence_v2
+    )
+
+    explainable_decision_v2 = build_explainable_decision_v2(
+        signal=signal,
+        score=score,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        historical_memory=historical_driver_memory,
+        confidence_v2=confidence_intelligence_v2,
+        ranking=market_movers_ranking
+    )
+
+    pe47_anchor("explain")
+
+    render_explainable_decision_v2(
+        explainable_decision_v2
+    )
+
+    predictive_intelligence = calculate_predictive_intelligence(
+        signal=signal,
+        score=score,
+        brent=brent,
+        wti=wti,
+        risk=risk,
+        adaptive_news=adaptive_news,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        confidence_v2=confidence_intelligence_v2
+    )
+
+    pe47_anchor("predictive")
+
+    render_predictive_intelligence(
+        predictive_intelligence
+    )
+
+    scenario_engine = build_scenario_engine(
+        predictive=predictive_intelligence,
+        brent=brent,
+        wti=wti,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        risk=risk
+    )
+
+    pe47_anchor("scenarios")
+
+    render_scenario_engine(
+        scenario_engine
+    )
+
+    driver_forecast = build_driver_forecast(
+        ranking=market_movers_ranking,
+        driver_report=driver_intelligence,
+        correlation_report=driver_correlation,
+        predictive=predictive_intelligence
+    )
+
+    render_driver_forecast(driver_forecast)
+
+    persistent_load_status = (
+        load_prediction_history_from_gist()
+    )
+
+    prediction_archive_status = record_prediction_archive(
+        predictive=predictive_intelligence,
+        scenario=scenario_engine,
+        forecast=driver_forecast,
+        driver_report=driver_intelligence,
+        signal=signal,
+        score=score,
+        confidence=confidence_intelligence_v2,
+        risk=risk,
+        regime=regime,
+        brent=brent,
+        wti=wti
+    )
+
+    outcome_validation = validate_prediction_outcomes(
+        brent=brent,
+        wti=wti,
+        minimum_age_hours=24
+    )
+
+    memory_changed = (
+        bool(
+            prediction_archive_status.get(
+                "stored",
+                False
+            )
+        )
+        or int(
+            outcome_validation.get(
+                "validated_now",
+                0
+            )
+        ) > 0
+    )
+
+    if persistent_load_status.get("ok"):
+        if memory_changed:
+            persistent_save_status = (
+                save_prediction_history_to_gist()
+            )
+        else:
+            persistent_save_status = {
+                "ok": True,
+                "skipped": True,
+                "mode": "PERSISTENT",
+                "rows": int(
+                    prediction_archive_status.get(
+                        "rows",
+                        0
+                    )
+                ),
+                "message": "No remote write required",
+            }
+    else:
+        persistent_save_status = {
+            "ok": False,
+            "skipped": True,
+            "mode": "FALLBACK",
+            "rows": int(
+                prediction_archive_status.get(
+                    "rows",
+                    0
+                )
+            ),
+            "message": (
+                "Remote write blocked after failed read"
+            ),
+        }
+
+    render_outcome_validation(outcome_validation)
+
+    render_persistent_outcome_status(
+        persistent_load_status,
+        persistent_save_status
+    )
+
+    learning_statistics = build_learning_statistics()
+
+    render_learning_statistics(learning_statistics)
 
     record_decision_journal(
         brent=brent,
@@ -3236,6 +7586,8 @@ def run_procureye_dashboard():
     )
 
 
+    pe47_anchor("journal")
+
     section(
         "Decision Journal",
         "Recorded market decisions and changes"
@@ -3246,26 +7598,12 @@ def run_procureye_dashboard():
 
 
 
+    pe47_anchor("system")
+
     render_confidence_engine(
         confidence_engine
     )
 
-    daily_market_brief = build_daily_market_brief(
-        brent=brent,
-        wti=wti,
-        signal=signal,
-        score=score,
-        confidence=confidence,
-        risk=risk,
-        regime=regime,
-        adaptive_news=adaptive_news,
-        confidence_engine=confidence_engine,
-        news=news,
-    )
-
-    render_daily_market_brief(
-        daily_market_brief
-    )
 
     section("System State", "Release 39 operating status")
 
@@ -3278,7 +7616,11 @@ def run_procureye_dashboard():
         st.metric("Learning State", "ACTIVE")
 
     with s3:
-        st.metric("Decision Mode", "SUPPORT ONLY")
+        pe47_compact_metric(
+            "pe47_decision_mode",
+            "Decision Mode",
+            "SUPPORT ONLY"
+        )
 
     with s4:
         st.metric("Human Oversight", "REQUIRED")
@@ -3289,5 +7631,1534 @@ def run_procureye_dashboard():
     )
 
 
+
+# ============================================================
+# PROCUREYE RELEASE 47.0 — PROFESSIONAL UI
+# ============================================================
+
+st.markdown("""
+<style>
+
+/* --------------------------------------------
+   BASE
+   -------------------------------------------- */
+
+:root {
+    --pe-navy: #0B2D4D;
+    --pe-blue: #123B5D;
+    --pe-border: #AFC2D2;
+    --pe-white: #FFFFFF;
+
+    --pe-green: #22C55E;
+    --pe-red: #EF4444;
+    --pe-yellow: #FACC15;
+}
+
+
+/* --------------------------------------------
+   METRIC CARDS
+   Blu come Release 46 + testo bianco
+   -------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    color: var(--pe-white) !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"],
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* --------------------------------------------
+   COLORI SEMANTICI
+   -------------------------------------------- */
+
+/* LONG / BULLISH */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-green) !important;
+}
+
+
+/* SHORT / BEARISH */
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-red) !important;
+}
+
+
+/* WAIT / NEUTRAL */
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-yellow) !important;
+}
+
+
+/* Le label restano bianche */
+[class*="st-key-pe47_"]
+[data-testid="stMetricLabel"],
+[class*="st-key-pe47_"]
+[data-testid="stMetricLabel"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* --------------------------------------------
+   BOTTONI
+   SOLO bianchi + scritte blue scuro
+   -------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background: var(--pe-white) !important;
+
+    color: var(--pe-navy) !important;
+
+    border: 1px solid
+        var(--pe-border) !important;
+
+    box-shadow: none !important;
+
+    font-weight: 600 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+
+    background:
+        var(--pe-white) !important;
+
+    color:
+        var(--pe-navy) !important;
+}
+
+
+/* --------------------------------------------
+   SIGNAL CHANGE
+   -------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: 0.82rem !important;
+
+    line-height: 1.05 !important;
+
+    white-space: normal !important;
+
+    overflow-wrap: anywhere !important;
+}
+
+
+/* Correlation State */
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"] {
+
+    font-size: 1.00rem !important;
+}
+
+
+/* Decision Mode */
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: 1.00rem !important;
+}
+
+
+/* --------------------------------------------
+   PLOTLY RANGE BUTTONS
+   -------------------------------------------- */
+
+.js-plotly-plot
+.rangeselector rect {
+
+    fill:
+        var(--pe-white) !important;
+}
+
+.js-plotly-plot
+.rangeselector text {
+
+    fill:
+        var(--pe-navy) !important;
+
+    font-weight: 600 !important;
+}
+
+
+/* --------------------------------------------
+   Spacing uniforme
+   -------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding-top: 0.15rem;
+    padding-bottom: 0.15rem;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+
+# PROCUREYE RELEASE 47.1 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.1 — LAYOUT REFINEMENT
+   ========================================================== */
+
+:root {
+    --pe47-navy: #0B2D4D;
+    --pe47-white: #FFFFFF;
+    --pe47-green: #22C55E;
+    --pe47-red: #EF4444;
+    --pe47-yellow: #FACC15;
+    --pe47-border: rgba(190, 210, 225, .28);
+}
+
+
+/* ----------------------------------------------------------
+   SEZIONI — PIÙ ARIA, GERARCHIA PIÙ PULITA
+   ---------------------------------------------------------- */
+
+h2 {
+    margin-top: 1.65rem !important;
+    margin-bottom: 0.35rem !important;
+}
+
+h3 {
+    margin-top: 1.25rem !important;
+    margin-bottom: 0.30rem !important;
+}
+
+[data-testid="stCaptionContainer"] {
+    margin-bottom: 0.45rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRIC CARD
+   Card blu -> testo bianco
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding-top: 0.28rem !important;
+    padding-bottom: 0.28rem !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: var(--pe47-white) !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLORI SEMANTICI — PRIORITÀ MASSIMA
+   ---------------------------------------------------------- */
+
+/* LONG / BULLISH -> VERDE */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-green) !important;
+}
+
+
+/* SHORT / BEARISH -> ROSSO */
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-red) !important;
+}
+
+
+/* WAIT / NEUTRAL -> GIALLO */
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"],
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe47-yellow) !important;
+}
+
+
+/* Label delle metriche semantiche sempre bianche */
+[class*="st-key-pe47_bull"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe47_bear"]
+[data-testid="stMetricLabel"] *,
+[class*="st-key-pe47_neutral"]
+[data-testid="stMetricLabel"] * {
+    color: var(--pe47-white) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE — PIÙ PICCOLO
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: 0.76rem !important;
+    line-height: 1.0 !important;
+
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION STATE / DECISION MODE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: 0.95rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI BIANCHI -> TESTO BLU SCURO
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: var(--pe47-white) !important;
+    color: var(--pe47-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    font-weight: 600 !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe47-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+
+    background-color: var(--pe47-white) !important;
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: var(--pe47-white) !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe47-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TABELLE — PIÙ COMPATTE
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    margin-top: 0.25rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   INFO / WARNING — RIDUCE RUMORE VISIVO
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    margin-top: 0.35rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   SPAZIATURA COLONNE
+   ---------------------------------------------------------- */
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.75rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.1 VISUAL
+
+
+# PROCUREYE 47.2 STYLE START
+
+st.markdown("""
+<style>
+
+/* ==============================================
+   CARD BLU: TESTO SEMPRE BIANCO
+   ============================================== */
+
+div[data-testid="stMetric"],
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+    color: #FFFFFF !important;
+}
+
+
+/* ==============================================
+   STATUS CARD
+   ============================================== */
+
+.pe47-status-card {
+    background: #123B5D;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+    min-height: 82px;
+}
+
+.pe47-status-label {
+    color: #FFFFFF !important;
+    font-size: 0.82rem;
+    margin-bottom: 0.22rem;
+}
+
+.pe47-status-value {
+    font-size: 1.45rem;
+    font-weight: 600;
+}
+
+
+/* LONG / BULLISH */
+.pe47-bull {
+    color: #22C55E !important;
+}
+
+
+/* SHORT / BEARISH */
+.pe47-bear {
+    color: #EF4444 !important;
+}
+
+
+/* WAIT / NEUTRAL */
+.pe47-neutral {
+    color: #FACC15 !important;
+}
+
+
+/* Altri stati */
+.pe47-standard {
+    color: #FFFFFF !important;
+}
+
+
+/* ==============================================
+   BOTTONI BIANCHI
+   ============================================== */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+    border-color: #B8C9D6 !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: #0B2D4D !important;
+}
+
+
+/* Refresh */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+}
+
+
+/* Plotly */
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: #0B2D4D !important;
+}
+
+
+/* Signal Change */
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+    font-size: 0.76rem !important;
+    line-height: 1.0 !important;
+    white-space: normal !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# PROCUREYE 47.2 STYLE END
+
+
+
+# PROCUREYE RELEASE 47.3 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.3 — VISUAL POLISH
+   ========================================================== */
+
+:root {
+    --pe-navy: #0B2D4D;
+    --pe-white: #FFFFFF;
+    --pe-green: #22C55E;
+    --pe-red: #EF4444;
+    --pe-yellow: #FACC15;
+    --pe-border: rgba(185,205,220,.26);
+}
+
+
+/* ----------------------------------------------------------
+   PAGINA
+   ---------------------------------------------------------- */
+
+.block-container {
+    padding-top: 1.25rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1500px !important;
+}
+
+
+/* ----------------------------------------------------------
+   TITOLI
+   ---------------------------------------------------------- */
+
+h1 {
+    margin-bottom: 0.20rem !important;
+}
+
+h2 {
+    margin-top: 1.55rem !important;
+    margin-bottom: 0.20rem !important;
+}
+
+h3 {
+    margin-top: 1.15rem !important;
+    margin-bottom: 0.18rem !important;
+}
+
+
+/* Subtitle / caption */
+[data-testid="stCaptionContainer"] {
+    margin-top: 0 !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   COLONNE
+   ---------------------------------------------------------- */
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.70rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRIC CARD
+   mantiene stile blu + testo bianco
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    padding: 0.38rem 0.15rem !important;
+}
+
+div[data-testid="stMetric"] label,
+div[data-testid="stMetric"] label *,
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"],
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] * {
+    color: var(--pe-white) !important;
+}
+
+
+/* Valori leggermente più compatti */
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] {
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   STATUS CARD 47.2
+   ---------------------------------------------------------- */
+
+.pe47-status-card {
+    min-height: 78px !important;
+    padding: 0.50rem 0.70rem !important;
+}
+
+.pe47-status-label {
+    font-size: 0.80rem !important;
+}
+
+.pe47-status-value {
+    font-size: 1.32rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* SEMANTICI */
+.pe47-bull {
+    color: var(--pe-green) !important;
+}
+
+.pe47-bear {
+    color: var(--pe-red) !important;
+}
+
+.pe47-neutral {
+    color: var(--pe-yellow) !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background: var(--pe-white) !important;
+    color: var(--pe-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    font-weight: 600 !important;
+
+    box-shadow: none !important;
+
+    min-height: 2.35rem !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color: var(--pe-navy) !important;
+}
+
+
+/* Refresh Now */
+.st-key-global_refresh button,
+.st-key-global_refresh button * {
+    background: var(--pe-white) !important;
+    color: var(--pe-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+    font-size: 0.72rem !important;
+    line-height: 1.0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION / DECISION
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+    font-size: 0.92rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   ALERT / INFO BOX
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    margin-top: 0.30rem !important;
+    margin-bottom: 0.60rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   DATAFRAME
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    margin-top: 0.20rem !important;
+    margin-bottom: 0.65rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   EXPANDER
+   ---------------------------------------------------------- */
+
+[data-testid="stExpander"] {
+    margin-top: 0.30rem !important;
+    margin-bottom: 0.55rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   PLOTLY
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: var(--pe-white) !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   MOBILE / TABLET
+   ---------------------------------------------------------- */
+
+@media (max-width: 900px) {
+
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+
+    .pe47-status-value {
+        font-size: 1.12rem !important;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.3 VISUAL
+
+
+
+# PROCUREYE RELEASE 47.4 VISUAL START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   PROCUREYE 47.4 — EXECUTIVE READABILITY
+   ========================================================== */
+
+:root {
+    --pe47-navy: #0B2D4D;
+    --pe47-white: #FFFFFF;
+    --pe47-green: #22C55E;
+    --pe47-red: #EF4444;
+    --pe47-yellow: #FACC15;
+}
+
+
+/* ----------------------------------------------------------
+   HEADER
+   ---------------------------------------------------------- */
+
+.pe-brand {
+    letter-spacing: .055em !important;
+}
+
+.pe-title {
+    margin-top: .20rem !important;
+    margin-bottom: .30rem !important;
+}
+
+.pe-copy {
+    max-width: 1100px !important;
+    line-height: 1.45 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TITOLI SEZIONE
+   più netti e meno "ammassati"
+   ---------------------------------------------------------- */
+
+h2 {
+    padding-top: .20rem !important;
+    margin-top: 1.65rem !important;
+}
+
+h3 {
+    margin-top: 1.20rem !important;
+}
+
+h2 + div,
+h3 + div {
+    margin-top: .15rem !important;
+}
+
+
+/* ----------------------------------------------------------
+   METRICHE
+   ---------------------------------------------------------- */
+
+div[data-testid="stMetric"] {
+    min-height: 82px !important;
+}
+
+div[data-testid="stMetric"]
+[data-testid="stMetricLabel"] {
+    font-size: .78rem !important;
+}
+
+div[data-testid="stMetric"]
+[data-testid="stMetricValue"] {
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   STATUS COLORS 47.2
+   ---------------------------------------------------------- */
+
+.pe47-bull {
+    color: var(--pe47-green) !important;
+}
+
+.pe47-bear {
+    color: var(--pe47-red) !important;
+}
+
+.pe47-neutral {
+    color: var(--pe47-yellow) !important;
+}
+
+
+/* ----------------------------------------------------------
+   DAILY MARKET BRIEF
+   ---------------------------------------------------------- */
+
+[data-testid="stMarkdownContainer"] strong {
+    font-weight: 650;
+}
+
+
+/* ----------------------------------------------------------
+   INFO / WARNING BOX
+   meno invasivi
+   ---------------------------------------------------------- */
+
+[data-testid="stAlert"] {
+    border-radius: 8px !important;
+}
+
+[data-testid="stAlert"] p {
+    line-height: 1.38 !important;
+}
+
+
+/* ----------------------------------------------------------
+   TABELLE
+   ---------------------------------------------------------- */
+
+[data-testid="stDataFrame"] {
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+
+
+/* ----------------------------------------------------------
+   BOTTONI
+   bianchi / testo blu scuro
+   ---------------------------------------------------------- */
+
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+
+    background-color: #FFFFFF !important;
+    color: var(--pe47-navy) !important;
+
+    border: 1px solid #B8C9D6 !important;
+
+    box-shadow: none !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   REFRESH
+   ---------------------------------------------------------- */
+
+.st-key-global_refresh button {
+    background: #FFFFFF !important;
+    color: var(--pe47-navy) !important;
+}
+
+.st-key-global_refresh button * {
+    color: var(--pe47-navy) !important;
+}
+
+
+/* ----------------------------------------------------------
+   SIGNAL CHANGE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_signal_change
+[data-testid="stMetricValue"] {
+
+    font-size: .70rem !important;
+    line-height: 1 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+}
+
+
+/* ----------------------------------------------------------
+   CORRELATION / DECISION MODE
+   ---------------------------------------------------------- */
+
+.st-key-pe47_correlation_state
+[data-testid="stMetricValue"],
+.st-key-pe47_decision_mode
+[data-testid="stMetricValue"] {
+
+    font-size: .90rem !important;
+    line-height: 1.05 !important;
+}
+
+
+/* ----------------------------------------------------------
+   GRAFICI
+   ---------------------------------------------------------- */
+
+.js-plotly-plot .rangeselector rect {
+    fill: #FFFFFF !important;
+}
+
+.js-plotly-plot .rangeselector text {
+    fill: var(--pe47-navy) !important;
+    font-weight: 600 !important;
+}
+
+
+/* ----------------------------------------------------------
+   SEPARAZIONE VISIVA TRA BLOCCHI
+   ---------------------------------------------------------- */
+
+hr {
+    border-color: rgba(170,195,212,.20) !important;
+}
+
+
+/* ----------------------------------------------------------
+   MOBILE
+   ---------------------------------------------------------- */
+
+@media (max-width: 768px) {
+
+    div[data-testid="stMetric"] {
+        min-height: 70px !important;
+    }
+
+    .pe47-status-value {
+        font-size: 1rem !important;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.4 VISUAL
+
+
+# PROCUREYE RELEASE 47.5 VISUAL START
+
+st.markdown("""
+<style>
+
+/* Semantic values */
+.pe47-bull {
+    color:#22C55E !important;
+    font-weight:700 !important;
+}
+
+.pe47-bear {
+    color:#EF4444 !important;
+    font-weight:700 !important;
+}
+
+.pe47-neutral {
+    color:#FACC15 !important;
+    font-weight:700 !important;
+}
+
+/* Status card */
+.pe47-status-card {
+    background:#123B5D !important;
+    border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:8px !important;
+    padding:.50rem .70rem !important;
+    min-height:78px !important;
+}
+
+.pe47-status-label {
+    color:#FFFFFF !important;
+    font-size:.80rem !important;
+}
+
+.pe47-status-delta {
+    color:#FFFFFF !important;
+    font-size:.78rem !important;
+    margin-top:.15rem !important;
+}
+
+/* Tutto ciò che non è semantico nelle card scure resta bianco */
+.pe47-standard {
+    color:#FFFFFF !important;
+}
+
+/* Bottoni bianchi -> blue scuro */
+div[data-testid="stButton"] button,
+button[data-testid="stBaseButton-secondary"],
+button[data-testid="stBaseButton-tertiary"] {
+    background:#FFFFFF !important;
+    color:#0B2D4D !important;
+}
+
+div[data-testid="stButton"] button *,
+button[data-testid="stBaseButton-secondary"] *,
+button[data-testid="stBaseButton-tertiary"] * {
+    color:#0B2D4D !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.5 VISUAL
+
+
+# PROCUREYE RELEASE 47.5.1 STYLE START
+
+st.markdown("""
+<style>
+
+.pe47-brief-title {
+    color:#FFFFFF !important;
+    font-weight:700 !important;
+    margin-top:.70rem !important;
+    margin-bottom:.12rem !important;
+}
+
+.pe47-brief-text {
+    color:#E8F1F6 !important;
+    line-height:1.45 !important;
+}
+
+/* LONG / BULLISH / BULL */
+.pe47-bull {
+    color:#22C55E !important;
+    font-weight:700 !important;
+}
+
+/* SHORT / BEARISH / BEAR */
+.pe47-bear {
+    color:#EF4444 !important;
+    font-weight:700 !important;
+}
+
+/* WAIT / NEUTRAL / BASE */
+.pe47-neutral {
+    color:#FACC15 !important;
+    font-weight:700 !important;
+}
+
+/* status card */
+.pe47-status-card {
+    background:#123B5D !important;
+    border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:8px !important;
+    padding:.50rem .70rem !important;
+    min-height:78px !important;
+}
+
+.pe47-status-label {
+    color:#FFFFFF !important;
+    font-size:.80rem !important;
+}
+
+.pe47-status-delta {
+    color:#FFFFFF !important;
+    font-size:.78rem !important;
+    margin-top:.15rem !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.5.1 STYLE
+
+
+# PROCUREYE RELEASE 47.6 QUICK NAV STYLE START
+
+st.markdown("""
+<style>
+
+/* Anchor compensation for Streamlit header */
+.pe47-anchor {
+    scroll-margin-top: 90px;
+    height: 1px;
+}
+
+/* Navigation container */
+.pe47-nav-wrap {
+    margin-top: 1rem;
+    margin-bottom: 1.25rem;
+    padding: .8rem .9rem;
+    border: 1px solid rgba(175,194,210,.22);
+    border-radius: 10px;
+    background: rgba(14,28,39,.50);
+}
+
+.pe47-nav-title {
+    color: #91A8B7;
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .10em;
+    margin-bottom: .55rem;
+}
+
+/* Responsive navigation */
+.pe47-nav-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .48rem;
+}
+
+/* White buttons / dark blue text */
+.pe47-nav-button,
+.pe47-nav-button:link,
+.pe47-nav-button:visited {
+    display: inline-block;
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6;
+    border-radius: 7px;
+
+    padding: .43rem .70rem;
+
+    font-size: .78rem;
+    font-weight: 650;
+    line-height: 1.1;
+
+    text-decoration: none !important;
+
+    transition:
+        transform .10s ease,
+        border-color .10s ease;
+}
+
+.pe47-nav-button:hover {
+    color: #0B2D4D !important;
+    border-color: #35A8D4;
+    transform: translateY(-1px);
+    text-decoration: none !important;
+}
+
+.pe47-nav-button:active {
+    transform: translateY(0);
+}
+
+/* Mobile */
+@media (max-width: 760px) {
+
+    .pe47-nav-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .pe47-nav-button {
+        text-align: center;
+        padding: .48rem .35rem;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6 QUICK NAV STYLE
+
+
+
+
+
+# PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE START
+
+st.markdown("""
+<style>
+
+/* Floating Back-to-Top button */
+
+.pe47-back-top,
+.pe47-back-top:link,
+.pe47-back-top:visited {
+
+    position: fixed;
+
+    right: 24px;
+    bottom: 24px;
+
+    width: 46px;
+    height: 46px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6;
+    border-radius: 50%;
+
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1;
+
+    text-decoration: none !important;
+
+    box-shadow:
+        0 4px 14px rgba(0,0,0,.22);
+
+    z-index: 999999;
+
+    transition:
+        transform .12s ease,
+        box-shadow .12s ease,
+        border-color .12s ease;
+}
+
+.pe47-back-top:hover {
+
+    color: #0B2D4D !important;
+
+    border-color: #35A8D4;
+
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 6px 18px rgba(0,0,0,.28);
+
+    text-decoration: none !important;
+}
+
+.pe47-back-top:active {
+    transform: translateY(0);
+}
+
+
+/* Mobile */
+
+@media (max-width: 760px) {
+
+    .pe47-back-top {
+
+        right: 14px;
+        bottom: 18px;
+
+        width: 42px;
+        height: 42px;
+
+        font-size: 1.25rem;
+    }
+
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.1 BACK TO TOP STYLE
+
+
+# PROCUREYE RELEASE 47.6.2 BACK TO TOP START
+
+_pe47_top_button = (
+    '<a href="#procureye-top" '
+    'class="pe47-back-top" '
+    'title="Back to Executive Dashboard" '
+    'aria-label="Back to Executive Dashboard">'
+    '↑'
+    '</a>'
+)
+
+st.markdown(
+    _pe47_top_button,
+    unsafe_allow_html=True
+)
+
+# END PROCUREYE RELEASE 47.6.2 BACK TO TOP
+
+
+# PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE START
+
+st.markdown("""
+<style>
+
+/* ==========================================================
+   QUICK NAVIGATION TITLE
+   ========================================================== */
+
+.pe47-nav-title {
+    color: #EFFF00 !important;
+    font-size: 1.05rem !important;
+    font-weight: 800 !important;
+    letter-spacing: .10em !important;
+
+    margin-top: .10rem !important;
+    margin-bottom: .70rem !important;
+}
+
+
+/* ==========================================================
+   QUICK NAVIGATION BUTTONS
+   ========================================================== */
+
+.pe47-nav-button,
+.pe47-nav-button:link,
+.pe47-nav-button:visited {
+
+    background: #FFFFFF !important;
+    color: #0B2D4D !important;
+
+    border: 1px solid #B8C9D6 !important;
+    border-radius: 7px !important;
+
+    font-weight: 700 !important;
+
+    text-decoration: none !important;
+}
+
+.pe47-nav-button:hover {
+
+    color: #0B2D4D !important;
+    border-color: #EFFF00 !important;
+
+    text-decoration: none !important;
+}
+
+
+/* ==========================================================
+   FLOATING BACK TO TOP
+   ========================================================== */
+
+.pe47-back-top,
+.pe47-back-top:link,
+.pe47-back-top:visited {
+
+    position: fixed !important;
+
+    right: 25px !important;
+    bottom: 90px !important;
+
+    width: 54px !important;
+    height: 54px !important;
+
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+
+    background: #0B2D4D !important;
+
+    /* GIALLO LIMONE */
+    color: #EFFF00 !important;
+
+    border: 2px solid #EFFF00 !important;
+
+    border-radius: 50% !important;
+
+    font-size: 2rem !important;
+    font-weight: 900 !important;
+
+    line-height: 1 !important;
+
+    text-decoration: none !important;
+
+    box-shadow:
+        0 5px 18px rgba(0,0,0,.32) !important;
+
+    z-index: 999999 !important;
+}
+
+
+.pe47-back-top:hover {
+
+    background: #123B5D !important;
+    color: #EFFF00 !important;
+
+    transform: translateY(-3px);
+
+    text-decoration: none !important;
+}
+
+
+/* Anchor */
+.pe47-anchor {
+    scroll-margin-top: 85px !important;
+}
+
+
+/* Mobile */
+@media (max-width: 760px) {
+
+    .pe47-nav-title {
+        font-size: .92rem !important;
+    }
+
+    .pe47-back-top {
+
+        width: 48px !important;
+        height: 48px !important;
+
+        right: 14px !important;
+        bottom: 75px !important;
+
+        font-size: 1.75rem !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.2 NAVIGATION STYLE
+
+
+# PROCUREYE RELEASE 47.6.3 EXECUTIVE TITLE START
+
+st.markdown("""
+<style>
+
+.pe47-executive-header {
+    margin-top: 1.10rem !important;
+    margin-bottom: .75rem !important;
+}
+
+.pe47-executive-title {
+    color: #EFFF00 !important;
+    font-size: 2.15rem !important;
+    font-weight: 900 !important;
+    line-height: 1.08 !important;
+    letter-spacing: .035em !important;
+}
+
+.pe47-executive-update {
+    color: #91A8B7 !important;
+    font-size: .82rem !important;
+    margin-top: .28rem !important;
+}
+
+/* Mobile */
+@media (max-width: 760px) {
+    .pe47-executive-title {
+        font-size: 1.65rem !important;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# END PROCUREYE RELEASE 47.6.3 EXECUTIVE TITLE
+
 if __name__ == "__main__":
     run_procureye_dashboard()
+
+
+# PROCUREYE RELEASE 47.6.5 NEWS QUALITY DEV
+# Oil relevance, bearish classification, title cleaning,
+# directional ranking and confidence-label clarity.
+
+
+# PROCUREYE RELEASE 47.6.5.1 HEALTH TIMESTAMP DEV
+# Retrieval-based freshness and real source status.
+
+
+# PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME DEV
+# GitHub Gist persistence with safe local fallback.
+
+
+# ================================================================
+# PROCUREYE RELEASE 47.6.5.2 PRODUCTION
+# Promoted from validated DEV release.
+# Persistent Outcome Memory enabled through GitHub Gist.
+# ================================================================
