@@ -5056,7 +5056,7 @@ def render_driver_forecast(report):
 
 
 # ============================================================
-# PROCUREYE RELEASE 47.6.5.2 DEV
+# PROCUREYE Release 47.6.5.3 DEV
 # PERSISTENT OUTCOME MEMORY — GITHUB GIST
 # ============================================================
 
@@ -5790,6 +5790,446 @@ def render_outcome_validation(report):
     )
 
 # END PROCUREYE RELEASE 46.1 DEV
+
+
+# ============================================================
+# PROCUREYE RELEASE 47.6.5.3 DEV — DAILY PREDICTION AUDIT
+# ============================================================
+
+MORNING_WINDOW_START = 8
+MORNING_WINDOW_END = 10
+
+
+def _pe_bool_series(series):
+    return (
+        series.astype(str)
+        .str.lower()
+        .isin(["true", "1", "yes"])
+    )
+
+
+def _pe_realized_state(market_return):
+    if market_return >= 0.75:
+        return "LONG"
+    if market_return <= -0.75:
+        return "SHORT"
+    return "WAIT"
+
+
+def _pe_brier_score(row, realized):
+    def probability(name):
+        value = pd.to_numeric(
+            pd.Series([row.get(name)]),
+            errors="coerce"
+        ).iloc[0]
+        return 0.0 if pd.isna(value) else float(value) / 100
+
+    actual = {
+        "LONG": (1, 0, 0),
+        "WAIT": (0, 1, 0),
+        "SHORT": (0, 0, 1)
+    }.get(realized, (0, 1, 0))
+
+    probabilities = (
+        probability("long_probability"),
+        probability("wait_probability"),
+        probability("short_probability")
+    )
+
+    return round(
+        sum(
+            (predicted - observed) ** 2
+            for predicted, observed
+            in zip(probabilities, actual)
+        ) / 3,
+        4
+    )
+
+
+def _pe_daily_closes(frame):
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return {}
+
+    if not {"Date", "Close"}.issubset(frame.columns):
+        return {}
+
+    data = frame[["Date", "Close"]].copy()
+    data["Date"] = pd.to_datetime(
+        data["Date"],
+        errors="coerce"
+    ).dt.date
+    data["Close"] = pd.to_numeric(
+        data["Close"],
+        errors="coerce"
+    )
+    data = data.dropna(subset=["Date", "Close"])
+
+    return {
+        date: float(group.iloc[-1]["Close"])
+        for date, group in data.groupby("Date", sort=True)
+    }
+
+
+def validate_morning_predictions(brent_df, wti_df):
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    result = {
+        "morning_predictions": 0,
+        "validated": 0,
+        "validated_now": 0,
+        "accuracy": 0.0,
+        "latest_result": "WAITING"
+    }
+
+    if not PREDICTION_HISTORY_FILE.exists():
+        return result
+
+    try:
+        history = pd.read_csv(PREDICTION_HISTORY_FILE)
+    except Exception:
+        return result
+
+    if history.empty or "timestamp_utc" not in history.columns:
+        return result
+
+    defaults = {
+        "morning_candidate": False,
+        "intraday_validated": False,
+        "intraday_outcome_timestamp_utc": "",
+        "intraday_brent_close": None,
+        "intraday_wti_close": None,
+        "intraday_brent_return_pct": None,
+        "intraday_wti_return_pct": None,
+        "intraday_market_return_pct": None,
+        "intraday_realized_state": "",
+        "intraday_prediction_correct": None,
+        "intraday_brier_score": None
+    }
+
+    for column, default in defaults.items():
+        if column not in history.columns:
+            history[column] = default
+
+    timestamps = pd.to_datetime(
+        history["timestamp_utc"],
+        errors="coerce",
+        utc=True
+    )
+    rome = ZoneInfo("Europe/Rome")
+    local_times = timestamps.dt.tz_convert(rome)
+
+    history["morning_candidate"] = False
+
+    eligible = history.loc[
+        timestamps.notna()
+        & local_times.dt.hour.ge(MORNING_WINDOW_START)
+        & local_times.dt.hour.lt(MORNING_WINDOW_END)
+    ].copy()
+
+    if not eligible.empty:
+        eligible["_local_date"] = (
+            local_times.loc[eligible.index].dt.date
+        )
+        eligible["_timestamp"] = timestamps.loc[eligible.index]
+        first_indices = (
+            eligible.sort_values("_timestamp")
+            .groupby("_local_date", sort=True)
+            .head(1)
+            .index
+        )
+        history.loc[first_indices, "morning_candidate"] = True
+
+    morning_mask = _pe_bool_series(history["morning_candidate"])
+    result["morning_predictions"] = int(morning_mask.sum())
+
+    brent_closes = _pe_daily_closes(brent_df)
+    wti_closes = _pe_daily_closes(wti_df)
+    today_rome = datetime.now(rome).date()
+    validated_now = 0
+
+    for idx, row in history.loc[morning_mask].iterrows():
+        if str(row.get("intraday_validated", False)).lower() in {
+            "true", "1", "yes"
+        }:
+            continue
+
+        created = timestamps.loc[idx]
+        if pd.isna(created):
+            continue
+
+        prediction_date = created.tz_convert(rome).date()
+
+        # A daily candle is treated as final only from the next day.
+        if prediction_date >= today_rome:
+            continue
+
+        brent_close = brent_closes.get(prediction_date)
+        wti_close = wti_closes.get(prediction_date)
+
+        entry_brent = pd.to_numeric(
+            pd.Series([row.get("brent")]),
+            errors="coerce"
+        ).iloc[0]
+        entry_wti = pd.to_numeric(
+            pd.Series([row.get("wti")]),
+            errors="coerce"
+        ).iloc[0]
+
+        if (
+            brent_close is None
+            or wti_close is None
+            or pd.isna(entry_brent)
+            or pd.isna(entry_wti)
+            or float(entry_brent) <= 0
+            or float(entry_wti) <= 0
+        ):
+            continue
+
+        brent_return = (
+            brent_close / float(entry_brent) - 1
+        ) * 100
+        wti_return = (
+            wti_close / float(entry_wti) - 1
+        ) * 100
+        market_return = (brent_return + wti_return) / 2
+        realized = _pe_realized_state(market_return)
+        prediction = str(row.get("prediction", "WAIT")).upper()
+        correct = prediction == realized
+
+        history.at[idx, "intraday_validated"] = True
+        history.at[idx, "intraday_outcome_timestamp_utc"] = (
+            datetime.now(timezone.utc).isoformat()
+        )
+        history.at[idx, "intraday_brent_close"] = round(brent_close, 4)
+        history.at[idx, "intraday_wti_close"] = round(wti_close, 4)
+        history.at[idx, "intraday_brent_return_pct"] = round(
+            brent_return, 3
+        )
+        history.at[idx, "intraday_wti_return_pct"] = round(
+            wti_return, 3
+        )
+        history.at[idx, "intraday_market_return_pct"] = round(
+            market_return, 3
+        )
+        history.at[idx, "intraday_realized_state"] = realized
+        history.at[idx, "intraday_prediction_correct"] = bool(correct)
+        history.at[idx, "intraday_brier_score"] = _pe_brier_score(
+            row, realized
+        )
+        validated_now += 1
+
+    history.to_csv(PREDICTION_HISTORY_FILE, index=False)
+
+    validated_mask = (
+        morning_mask
+        & _pe_bool_series(history["intraday_validated"])
+    )
+    validated = history.loc[validated_mask].copy()
+
+    result["validated_now"] = validated_now
+    result["validated"] = len(validated)
+
+    if not validated.empty:
+        correct = _pe_bool_series(
+            validated["intraday_prediction_correct"]
+        )
+        result["accuracy"] = round(correct.mean() * 100, 1)
+        last = validated.iloc[-1]
+        last_correct = str(
+            last.get("intraday_prediction_correct", False)
+        ).lower() in {"true", "1", "yes"}
+        result["latest_result"] = (
+            f"{last.get('prediction', 'WAIT')} → "
+            f"{last.get('intraday_realized_state', 'WAIT')} · "
+            f"{'CORRECT' if last_correct else 'WRONG'}"
+        )
+
+    return result
+
+
+def render_intraday_validation(report):
+    section(
+        "Morning-to-Close Validation",
+        "First 08:00-10:00 Europe/Rome prediction versus the same-day daily close"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric(
+            "Morning Predictions",
+            int(report.get("morning_predictions", 0))
+        )
+    with c2:
+        st.metric(
+            "Validated EOD",
+            int(report.get("validated", 0))
+        )
+    with c3:
+        st.metric(
+            "Intraday Accuracy",
+            f"{report.get('accuracy', 0):.1f}%"
+        )
+    with c4:
+        st.metric(
+            "Validated Now",
+            int(report.get("validated_now", 0))
+        )
+
+    if report.get("validated", 0):
+        st.info(
+            "Latest morning validation: "
+            + str(report.get("latest_result", "N/A"))
+        )
+    else:
+        st.info(
+            "Waiting for the first eligible morning prediction "
+            "and its completed daily close."
+        )
+
+    st.caption(
+        "One sample per market day: the first stored prediction from "
+        "08:00 inclusive to 10:00 exclusive (Europe/Rome). It is "
+        "validated from the following day. LONG is above +0.75%, "
+        "SHORT below -0.75%, otherwise WAIT."
+    )
+
+
+def render_prediction_audit_log():
+    section(
+        "Prediction Audit Log",
+        "Day-by-day trace of stored predictions, 24-hour outcomes and morning-to-close outcomes"
+    )
+
+    if not PREDICTION_HISTORY_FILE.exists():
+        st.info("Prediction history is not available yet.")
+        return
+
+    try:
+        history = pd.read_csv(PREDICTION_HISTORY_FILE)
+    except Exception:
+        st.warning("Prediction history could not be read.")
+        return
+
+    if history.empty:
+        st.info("Prediction history is empty.")
+        return
+
+    timestamps = pd.to_datetime(
+        history.get("timestamp_utc"),
+        errors="coerce",
+        utc=True
+    ).dt.tz_convert("Europe/Rome")
+
+    audit = pd.DataFrame({
+        "Date": timestamps.dt.strftime("%Y-%m-%d"),
+        "Time Rome": timestamps.dt.strftime("%H:%M"),
+        "Morning": history.get("morning_candidate", False),
+        "Prediction": history.get("prediction", "WAIT"),
+        "Probability %": pd.to_numeric(
+            history.get("prediction_probability"),
+            errors="coerce"
+        ),
+        "Entry Brent": pd.to_numeric(
+            history.get("brent"), errors="coerce"
+        ),
+        "Entry WTI": pd.to_numeric(
+            history.get("wti"), errors="coerce"
+        ),
+        "24h State": history.get("realized_state", ""),
+        "24h Result": history.get("prediction_correct", ""),
+        "24h Return %": pd.to_numeric(
+            history.get("market_return_pct"), errors="coerce"
+        ),
+        "24h Brier": pd.to_numeric(
+            history.get("brier_score"), errors="coerce"
+        ),
+        "EOD State": history.get("intraday_realized_state", ""),
+        "EOD Result": history.get(
+            "intraday_prediction_correct", ""
+        ),
+        "EOD Return %": pd.to_numeric(
+            history.get("intraday_market_return_pct"),
+            errors="coerce"
+        ),
+        "EOD Brier": pd.to_numeric(
+            history.get("intraday_brier_score"), errors="coerce"
+        ),
+        "Driver": history.get("dominant_driver", "NONE"),
+        "Scenario": history.get("scenario", "BASE")
+    })
+
+    def result_label(value):
+        text = str(value).lower()
+        if text in {"true", "1", "yes"}:
+            return "CORRECT"
+        if text in {"false", "0", "no"}:
+            return "WRONG"
+        return "PENDING"
+
+    audit["Morning"] = _pe_bool_series(
+        pd.Series(audit["Morning"])
+    ).map({True: "YES", False: "NO"})
+    audit["24h Result"] = audit["24h Result"].map(result_label)
+    audit["EOD Result"] = audit["EOD Result"].map(result_label)
+
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        signal_filter = st.selectbox(
+            "Prediction filter",
+            ["ALL", "LONG", "WAIT", "SHORT"],
+            key="pe_audit_signal"
+        )
+    with f2:
+        result_filter = st.selectbox(
+            "Result filter",
+            ["ALL", "CORRECT", "WRONG", "PENDING"],
+            key="pe_audit_result"
+        )
+    with f3:
+        morning_only = st.checkbox(
+            "Morning predictions only",
+            value=False,
+            key="pe_audit_morning"
+        )
+
+    filtered = audit.copy()
+    if signal_filter != "ALL":
+        filtered = filtered[
+            filtered["Prediction"].astype(str).str.upper()
+            == signal_filter
+        ]
+    if result_filter != "ALL":
+        filtered = filtered[
+            (filtered["24h Result"] == result_filter)
+            | (filtered["EOD Result"] == result_filter)
+        ]
+    if morning_only:
+        filtered = filtered[filtered["Morning"] == "YES"]
+
+    filtered = filtered.iloc[::-1].reset_index(drop=True)
+
+    st.dataframe(
+        pe47_semantic_df(filtered),
+        width="stretch",
+        hide_index=True,
+        height=min(620, 85 + max(1, len(filtered)) * 35)
+    )
+
+    st.caption(
+        f"Showing {len(filtered)} of {len(audit)} stored prediction(s)."
+    )
+
+    st.download_button(
+        "Download Complete Prediction Audit CSV",
+        data=history.to_csv(index=False).encode("utf-8"),
+        file_name="procureye_prediction_audit.csv",
+        mime="text/csv",
+        key="pe_download_prediction_audit"
+    )
+
+
+# END PROCUREYE RELEASE 47.6.5.3 DAILY PREDICTION AUDIT
 
 
 # ============================================================
@@ -6582,7 +7022,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.5.2 DEV
+    <div class="pe-release">Release 47.6.5.3 DEV
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -7504,6 +7944,11 @@ def run_procureye_dashboard():
         minimum_age_hours=24
     )
 
+    intraday_validation = validate_morning_predictions(
+        brent_df=brent_df,
+        wti_df=wti_df
+    )
+
     memory_changed = (
         bool(
             prediction_archive_status.get(
@@ -7513,6 +7958,12 @@ def run_procureye_dashboard():
         )
         or int(
             outcome_validation.get(
+                "validated_now",
+                0
+            )
+        ) > 0
+        or int(
+            intraday_validation.get(
                 "validated_now",
                 0
             )
@@ -7559,6 +8010,12 @@ def run_procureye_dashboard():
         persistent_load_status,
         persistent_save_status
     )
+
+    render_intraday_validation(
+        intraday_validation
+    )
+
+    render_prediction_audit_log()
 
     learning_statistics = build_learning_statistics()
 
@@ -9155,3 +9612,17 @@ if __name__ == "__main__":
 
 # PROCUREYE RELEASE 47.6.5.2 PERSISTENT OUTCOME DEV
 # GitHub Gist persistence with safe local fallback.
+
+
+# ================================================================
+# PROCUREYE RELEASE 47.6.5.2 PRODUCTION
+# Promoted from validated DEV release.
+# Persistent Outcome Memory enabled through GitHub Gist.
+# ================================================================
+
+
+# ================================================================
+# PROCUREYE RELEASE 47.6.5.3 DEV
+# Prediction Audit Log and Morning-to-Close Validation.
+# Production logic and predictive weights unchanged.
+# ================================================================
