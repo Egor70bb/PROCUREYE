@@ -5056,7 +5056,7 @@ def render_driver_forecast(report):
 
 
 # ============================================================
-# PROCUREYE Release 47.6.5.3 DEV
+# PROCUREYE Release 47.6.5.5 DEV
 # PERSISTENT OUTCOME MEMORY — GITHUB GIST
 # ============================================================
 
@@ -5533,13 +5533,68 @@ def record_prediction_archive(
 # PROCUREYE RELEASE 46.1 DEV — OUTCOME VALIDATION
 # ============================================================
 
+def _fetch_hourly_outcome_prices(ticker, start_utc, end_utc):
+    """Return hourly Yahoo closes without changing the live-price engine."""
+    encoded = requests.utils.quote(ticker, safe="")
+    url = (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        + encoded
+    )
+
+    try:
+        response = requests.get(
+            url,
+            params={
+                "period1": int(start_utc.timestamp()),
+                "period2": int(end_utc.timestamp()),
+                "interval": "1h",
+                "events": "history",
+                "includePrePost": "false",
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        result = response.json()["chart"]["result"][0]
+        timestamps = result.get("timestamp", [])
+        closes = (
+            result.get("indicators", {})
+            .get("quote", [{}])[0]
+            .get("close", [])
+        )
+        count = min(len(timestamps), len(closes))
+        frame = pd.DataFrame({
+            "timestamp": pd.to_datetime(
+                timestamps[:count], unit="s", utc=True
+            ),
+            "close": pd.to_numeric(closes[:count], errors="coerce"),
+        }).dropna()
+        return frame.sort_values("timestamp")
+    except Exception:
+        return pd.DataFrame(columns=["timestamp", "close"])
+
+
+def _first_quote_at_or_after(frame, target_utc, max_delay_hours=72):
+    if frame is None or frame.empty:
+        return None
+    eligible = frame[frame["timestamp"] >= target_utc]
+    if eligible.empty:
+        return None
+    quote = eligible.iloc[0]
+    delay = (
+        quote["timestamp"] - target_utc
+    ).total_seconds() / 3600
+    if delay > max_delay_hours:
+        return None
+    return float(quote["close"]), quote["timestamp"], float(delay)
+
+
 def validate_prediction_outcomes(
     brent,
     wti,
     minimum_age_hours=24
 ):
-    from pathlib import Path
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
 
     file = PREDICTION_HISTORY_FILE
 
@@ -5548,6 +5603,10 @@ def validate_prediction_outcomes(
         "total_validated": 0,
         "total_predictions": 0,
         "accuracy": 0.0,
+        "record_accuracy": 0.0,
+        "daily_validated": 0,
+        "daily_brier": 0.0,
+        "legacy_rows": 0,
         "latest_result": "WAITING"
     }
 
@@ -5572,7 +5631,12 @@ def validate_prediction_outcomes(
         "market_return_pct": None,
         "realized_state": "",
         "prediction_correct": None,
-        "brier_score": None
+        "brier_score": None,
+        "outcome_target_utc": "",
+        "outcome_price_timestamp_utc": "",
+        "outcome_horizon_hours": None,
+        "outcome_delay_hours": None,
+        "outcome_method": "",
     }
 
     for col, default in required_columns.items():
@@ -5587,32 +5651,30 @@ def validate_prediction_outcomes(
         except Exception:
             return default
 
-    current_brent = num(
-        brent.get("price")
-        if isinstance(brent, dict)
-        else None
-    )
-
-    current_wti = num(
-        wti.get("price")
-        if isinstance(wti, dict)
-        else None
-    )
-
-    if current_brent <= 0 or current_wti <= 0:
-        return result
-
     now = datetime.now(timezone.utc)
     validated_now = 0
 
+    created_all = pd.to_datetime(
+        history.get("timestamp_utc"), errors="coerce", utc=True
+    )
+    eligible_created = created_all[
+        created_all.notna()
+        & ((now - created_all).dt.total_seconds() >= minimum_age_hours * 3600)
+    ]
+
+    brent_hourly = pd.DataFrame()
+    wti_hourly = pd.DataFrame()
+    if not eligible_created.empty:
+        history_start = eligible_created.min().to_pydatetime() + timedelta(hours=18)
+        history_end = now + timedelta(hours=2)
+        brent_hourly = _fetch_hourly_outcome_prices(
+            "BZ=F", history_start, history_end
+        )
+        wti_hourly = _fetch_hourly_outcome_prices(
+            "CL=F", history_start, history_end
+        )
+
     for idx, row in history.iterrows():
-
-        already_validated = str(
-            row.get("outcome_validated", False)
-        ).lower() in {"true", "1", "yes"}
-
-        if already_validated:
-            continue
 
         try:
             created = pd.to_datetime(
@@ -5635,13 +5697,17 @@ def validate_prediction_outcomes(
         if entry_brent <= 0 or entry_wti <= 0:
             continue
 
-        brent_return = (
-            current_brent / entry_brent - 1
-        ) * 100
+        target = pd.Timestamp(created) + pd.Timedelta(hours=24)
+        brent_quote = _first_quote_at_or_after(brent_hourly, target)
+        wti_quote = _first_quote_at_or_after(wti_hourly, target)
 
-        wti_return = (
-            current_wti / entry_wti - 1
-        ) * 100
+        # Never overwrite a prior result unless both target-price quotes exist.
+        if brent_quote is None or wti_quote is None:
+            continue
+
+        outcome_time = max(brent_quote[1], wti_quote[1])
+        brent_return = (brent_quote[0] / entry_brent - 1) * 100
+        wti_return = (wti_quote[0] / entry_wti - 1) * 100
 
         market_return = (
             brent_return + wti_return
@@ -5689,7 +5755,20 @@ def validate_prediction_outcomes(
         ) / 3
 
         history.at[idx, "outcome_validated"] = True
-        history.at[idx, "outcome_timestamp_utc"] = now.isoformat()
+        previously_exact = str(
+            row.get("outcome_method", "")
+        ).upper() == "TARGET_24H_HOURLY"
+
+        history.at[idx, "outcome_timestamp_utc"] = outcome_time.isoformat()
+        history.at[idx, "outcome_target_utc"] = target.isoformat()
+        history.at[idx, "outcome_price_timestamp_utc"] = outcome_time.isoformat()
+        history.at[idx, "outcome_horizon_hours"] = round(
+            (outcome_time.to_pydatetime() - created).total_seconds() / 3600, 2
+        )
+        history.at[idx, "outcome_delay_hours"] = round(
+            max(brent_quote[2], wti_quote[2]), 2
+        )
+        history.at[idx, "outcome_method"] = "TARGET_24H_HOURLY"
         history.at[idx, "brent_return_pct"] = round(brent_return, 3)
         history.at[idx, "wti_return_pct"] = round(wti_return, 3)
         history.at[idx, "market_return_pct"] = round(market_return, 3)
@@ -5697,7 +5776,8 @@ def validate_prediction_outcomes(
         history.at[idx, "prediction_correct"] = bool(correct)
         history.at[idx, "brier_score"] = round(brier, 4)
 
-        validated_now += 1
+        if not previously_exact:
+            validated_now += 1
 
     history.to_csv(
         file,
@@ -5723,10 +5803,52 @@ def validate_prediction_outcomes(
             .isin(["true", "1", "yes"])
         )
 
-        result["accuracy"] = round(
+        result["record_accuracy"] = round(
             correct_series.mean() * 100,
             1
         )
+
+        # Primary statistic: one independent observation per Italian
+        # weekday, using the first stored prediction of that day.
+        exact_mask = (
+            validated.get(
+                "outcome_method",
+                pd.Series("", index=validated.index),
+            )
+            .astype(str).str.upper()
+            .eq("TARGET_24H_HOURLY")
+        )
+        exact_validated = validated.loc[exact_mask].copy()
+        exact_validated["_timestamp"] = pd.to_datetime(
+            exact_validated["timestamp_utc"], errors="coerce", utc=True
+        )
+        exact_validated["_rome"] = exact_validated["_timestamp"].dt.tz_convert(
+            "Europe/Rome"
+        )
+        exact_validated["_date"] = exact_validated["_rome"].dt.date
+        exact_validated["_weekday"] = exact_validated["_rome"].dt.weekday
+        daily = (
+            exact_validated[exact_validated["_weekday"] < 5]
+            .sort_values("_timestamp")
+            .groupby("_date", as_index=False)
+            .head(1)
+        )
+        daily_correct = (
+            daily["prediction_correct"].astype(str).str.lower()
+            .isin(["true", "1", "yes"])
+        )
+        result["daily_validated"] = len(daily)
+        result["accuracy"] = (
+            round(daily_correct.mean() * 100, 1)
+            if not daily.empty else 0.0
+        )
+        daily_brier = pd.to_numeric(
+            daily.get("brier_score"), errors="coerce"
+        ).dropna()
+        if not daily_brier.empty:
+            result["daily_brier"] = round(daily_brier.mean(), 4)
+
+        result["legacy_rows"] = int((~exact_mask).sum())
 
         last = validated.iloc[-1]
 
@@ -5762,14 +5884,14 @@ def render_outcome_validation(report):
 
     with c3:
         st.metric(
-            "Accuracy",
+            "Daily Accuracy",
             f"{report.get('accuracy', 0):.1f}%"
         )
 
     with c4:
         st.metric(
-            "Validated Now",
-            int(report.get("validated_now", 0))
+            "Daily Samples",
+            int(report.get("daily_validated", 0))
         )
 
     if report.get("total_validated", 0) == 0:
@@ -5784,16 +5906,27 @@ def render_outcome_validation(report):
         )
 
     st.caption(
-        "Realized state: LONG above +0.75%, "
-        "SHORT below -0.75%, otherwise WAIT, "
-        "using the average Brent/WTI return after at least 24 hours."
+        "Primary accuracy uses one independent sample per Italian weekday "
+        "(the first stored prediction). Record-level diagnostic accuracy: "
+        f"{report.get('record_accuracy', 0):.1f}%. Daily Brier Score: "
+        f"{report.get('daily_brier', 0):.4f}. Outcomes use the first hourly "
+        "Brent/WTI quote at or after timestamp + 24h; market closures may "
+        "delay the quote by up to 72 hours. LONG is above +0.75%, SHORT "
+        "below -0.75%, otherwise WAIT."
     )
+
+    if int(report.get("legacy_rows", 0)) > 0:
+        st.warning(
+            f"{int(report.get('legacy_rows', 0))} legacy outcome(s) are "
+            "preserved but excluded from primary statistics until an "
+            "hourly +24h quote is available for recalculation."
+        )
 
 # END PROCUREYE RELEASE 46.1 DEV
 
 
 # ============================================================
-# PROCUREYE RELEASE 47.6.5.3 DEV — DAILY PREDICTION AUDIT
+# PROCUREYE RELEASE 47.6.5.5 DEV — DAILY PREDICTION AUDIT
 # ============================================================
 
 MORNING_WINDOW_START = 8
@@ -6144,6 +6277,10 @@ def render_prediction_audit_log():
         "24h Brier": pd.to_numeric(
             history.get("brier_score"), errors="coerce"
         ),
+        "24h Horizon": pd.to_numeric(
+            history.get("outcome_horizon_hours"), errors="coerce"
+        ),
+        "24h Method": history.get("outcome_method", ""),
         "EOD State": history.get("intraday_realized_state", ""),
         "EOD Result": history.get(
             "intraday_prediction_correct", ""
@@ -6217,7 +6354,9 @@ def render_prediction_audit_log():
     )
 
     st.caption(
-        f"Showing {len(filtered)} of {len(audit)} stored prediction(s)."
+        f"Showing {len(filtered)} of {len(audit)} stored prediction(s). "
+        "The dashboard's primary accuracy counts only the first validated "
+        "prediction of each Italian weekday."
     )
 
     st.download_button(
@@ -6229,7 +6368,7 @@ def render_prediction_audit_log():
     )
 
 
-# END PROCUREYE RELEASE 47.6.5.3 DAILY PREDICTION AUDIT
+# END PROCUREYE RELEASE 47.6.5.5 DAILY PREDICTION AUDIT
 
 
 # ============================================================
@@ -6245,6 +6384,8 @@ def build_learning_statistics():
     empty = {
         "predictions": 0,
         "validated": 0,
+        "record_validated": 0,
+        "record_accuracy": 0.0,
         "accuracy": 0.0,
         "brier": 0.0,
         "recent_accuracy": 0.0,
@@ -6292,12 +6433,36 @@ def build_learning_statistics():
         valid["Correct"].astype(int)
     )
 
-    result["validated"] = len(valid)
-
-    result["accuracy"] = round(
-        valid["CorrectInt"].mean() * 100,
-        1
+    result["record_validated"] = len(valid)
+    result["record_accuracy"] = round(
+        valid["CorrectInt"].mean() * 100, 1
     )
+
+    if "outcome_method" in valid.columns:
+        valid = valid[
+            valid["outcome_method"].astype(str).str.upper()
+            == "TARGET_24H_HOURLY"
+        ].copy()
+    else:
+        valid = valid.iloc[0:0].copy()
+
+    valid["_timestamp"] = pd.to_datetime(
+        valid["timestamp_utc"], errors="coerce", utc=True
+    )
+    valid["_rome"] = valid["_timestamp"].dt.tz_convert("Europe/Rome")
+    valid["_date"] = valid["_rome"].dt.date
+    valid["_weekday"] = valid["_rome"].dt.weekday
+    valid = (
+        valid[valid["_weekday"] < 5]
+        .sort_values("_timestamp")
+        .groupby("_date", as_index=False)
+        .head(1)
+        .copy()
+    )
+    result["validated"] = len(valid)
+    result["accuracy"] = round(
+        valid["CorrectInt"].mean() * 100, 1
+    ) if not valid.empty else 0.0
 
     if "brier_score" in valid.columns:
 
@@ -6451,25 +6616,25 @@ def render_learning_statistics(report):
 
     with a:
         st.metric(
-            "Predictions",
+            "Stored Records",
             int(report.get("predictions", 0))
         )
 
     with b:
         st.metric(
-            "Validated",
+            "Daily Samples",
             int(report.get("validated", 0))
         )
 
     with c:
         st.metric(
-            "Overall Accuracy",
+            "Daily Accuracy",
             f"{report.get('accuracy', 0):.1f}%"
         )
 
     with d:
         st.metric(
-            "Last 30 Accuracy",
+            "Last 30 Days",
             f"{report.get('recent_accuracy', 0):.1f}%"
         )
 
@@ -6484,8 +6649,16 @@ def render_learning_statistics(report):
         return
 
     st.metric(
-        "Average Brier Score",
+        "Daily Average Brier Score",
         f"{report.get('brier', 0):.4f}"
+    )
+
+    st.caption(
+        "Primary learning statistics use the first validated prediction "
+        "of each Italian weekday. Stored-record diagnostic: "
+        f"{report.get('record_validated', 0)} validations · "
+        f"{report.get('record_accuracy', 0):.1f}% accuracy. "
+        "Repeated refreshes do not receive additional statistical weight."
     )
 
     by_signal = report.get("by_signal")
@@ -7022,7 +7195,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.5.3 DEV
+    <div class="pe-release">Release 47.6.5.5 DEV
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
