@@ -297,6 +297,9 @@ BULLISH_RULES = {
     "refinery runs increase": 16,
     "dollar falls": 14,
     "rate cut": 12,
+    "doubts grow over supply boost": 34,
+    "doubts over supply boost": 34,
+    "supply boost doubts": 32,
 }
 
 
@@ -327,6 +330,9 @@ BEARISH_RULES = {
     "cuts demand forecast": 28,
     "demand forecast cut": 26,
     "reduces demand forecast": 28,
+    "cuts oil demand growth forecast": 38,
+    "cuts global oil demand growth forecast": 40,
+    "demand growth forecast cut": 38,
 }
 
 
@@ -533,6 +539,30 @@ def _analyse(title, summary, source, published):
     )
     bullish_score = _term_score(text, BULLISH_RULES)
     bearish_score = _term_score(text, BEARISH_RULES)
+
+    # Context rules take precedence over isolated keywords.  For example,
+    # "demand growth" is positive only when growth is rising; a cut to a
+    # demand-growth forecast is bearish.  Likewise, doubts about a promised
+    # supply increase imply tighter supply and are bullish for prices.
+    demand_forecast_cut = bool(re.search(
+        r"\b(cut|cuts|cutting|lower|lowers|lowered|reduce|reduces|reduced)\b"
+        r".{0,45}\bdemand\b.{0,35}\bforecast\b",
+        text,
+    ))
+    supply_boost_doubt = bool(re.search(
+        r"\b(doubt|doubts|uncertain|uncertainty)\b"
+        r".{0,45}\b(supply|output|production)\b"
+        r".{0,30}\b(boost|increase|rise)\b",
+        text,
+    ))
+
+    if demand_forecast_cut:
+        bullish_score = max(0, bullish_score - 24)
+        bearish_score += 42
+
+    if supply_boost_doubt:
+        bearish_score = max(0, bearish_score - 18)
+        bullish_score += 36
     source_quality = _source_score(source)
 
     age_hours = max(
@@ -2017,8 +2047,8 @@ def calculate_confidence_engine(
 def render_confidence_engine(result):
 
     section(
-        "Confidence Engine",
-        "Explainable confidence decomposition"
+        "Legacy Confidence Diagnostic",
+        "Preliminary decomposition retained for comparison; Confidence v2 is official"
     )
 
     c1,c2=st.columns([1,2])
@@ -2026,7 +2056,7 @@ def render_confidence_engine(result):
     with c1:
 
         st.metric(
-            "Overall Confidence",
+            "Preliminary Confidence",
             f'{result["score"]}%'
         )
 
@@ -2167,9 +2197,9 @@ def build_daily_market_brief(
     )
 
     decision = (
-        f"PROCUREYE indicates {clean_signal} with "
+        f"The preliminary engine indicates {clean_signal} with "
         f"Market Score {int(score)}/100, "
-        f"Confidence Engine {confidence_score}% "
+        f"preliminary confidence {confidence_score}% "
         f"({confidence_label}), risk {risk}, "
         f"and regime {regime}."
     )
@@ -3249,6 +3279,92 @@ def record_historical_driver_memory(
 
 
 def build_historical_driver_memory():
+    # Prefer the persistent prediction history synchronized from GitHub Gist.
+    # This survives Streamlit restarts and replaces the former /tmp-only view.
+    if PREDICTION_HISTORY_FILE.exists():
+        try:
+            archive = pd.read_csv(PREDICTION_HISTORY_FILE)
+        except Exception:
+            archive = pd.DataFrame()
+
+        required = {
+            "timestamp_utc", "dominant_driver", "driver_direction",
+            "prediction", "market_score", "brent", "wti",
+        }
+        if not archive.empty and required.issubset(archive.columns):
+            persistent = archive.sort_values("timestamp_utc", ascending=False).head(200).copy()
+            frequency = (
+                persistent.groupby("dominant_driver", dropna=False)
+                .agg(
+                    Observations=("dominant_driver", "size"),
+                    **{"Average Market Score": ("market_score", "mean")},
+                )
+                .reset_index()
+                .rename(columns={"dominant_driver": "Driver"})
+                .sort_values("Observations", ascending=False)
+                .head(10)
+            )
+            frequency["Average Market Score"] = pd.to_numeric(
+                frequency["Average Market Score"], errors="coerce"
+            ).round(1)
+
+            history = pd.DataFrame({
+                "Timestamp UTC": pd.to_datetime(
+                    persistent["timestamp_utc"], errors="coerce", utc=True
+                ).dt.strftime("%d %b %Y · %H:%M UTC"),
+                "Dominant Driver": persistent["dominant_driver"],
+                "Driver Direction": persistent["driver_direction"],
+                "Signal": persistent["prediction"],
+                "Market Score": persistent["market_score"],
+                "Brent": persistent["brent"],
+                "WTI": persistent["wti"],
+            })
+            main_driver = str(
+                persistent["dominant_driver"].astype(str).value_counts().index[0]
+            )
+            latest_direction = str(
+                persistent.iloc[0].get("driver_direction", "NEUTRAL")
+            )
+            predictive_accuracy = 0.0
+            if {
+                "outcome_validated", "prediction_correct", "outcome_method"
+            }.issubset(archive.columns):
+                evaluated = archive[
+                    archive["outcome_validated"].astype(str).str.lower()
+                    .isin(["true", "1", "yes"])
+                    & archive["outcome_method"].astype(str).str.upper()
+                    .eq("TARGET_24H_HOURLY")
+                ].copy()
+                evaluated["_ts"] = pd.to_datetime(
+                    evaluated["timestamp_utc"], errors="coerce", utc=True
+                )
+                evaluated["_rome"] = evaluated["_ts"].dt.tz_convert("Europe/Rome")
+                evaluated["_date"] = evaluated["_rome"].dt.date
+                evaluated["_weekday"] = evaluated["_rome"].dt.weekday
+                evaluated = (
+                    evaluated[evaluated["_weekday"] < 5]
+                    .sort_values("_ts")
+                    .groupby("_date", as_index=False)
+                    .head(1)
+                    .tail(20)
+                )
+                if not evaluated.empty:
+                    predictive_accuracy = float(
+                        evaluated["prediction_correct"].astype(str).str.lower()
+                        .isin(["true", "1", "yes"]).mean() * 100
+                    )
+
+            return {
+                "total": int(len(archive)),
+                "main_driver": main_driver,
+                "latest_direction": latest_direction,
+                "average_alignment": int(round(predictive_accuracy)),
+                "predictive_accuracy": round(predictive_accuracy, 1),
+                "frequency": frequency,
+                "history": history,
+                "source": "PERSISTENT_GIST",
+            }
+
     connection = _driver_memory_connection()
 
     history = pd.read_sql_query(
@@ -3340,6 +3456,7 @@ def build_historical_driver_memory():
         "average_alignment": average_alignment,
         "frequency": frequency,
         "history": history,
+        "source": "RUNTIME_FALLBACK",
     }
 
 
@@ -3374,7 +3491,7 @@ def render_historical_driver_memory(memory):
 
     with m4:
         st.metric(
-            "Average Alignment",
+            "Rolling Accuracy" if memory.get("source") == "PERSISTENT_GIST" else "Average Alignment",
             f"{int(memory.get('average_alignment', 0))}%"
         )
 
@@ -3404,10 +3521,16 @@ def render_historical_driver_memory(memory):
             "Observations will accumulate after refreshes."
         )
 
-    st.caption(
-        "DEV memory uses the current Streamlit runtime "
-        "and may reset after a cloud restart."
-    )
+    if memory.get("source") == "PERSISTENT_GIST":
+        st.caption(
+            "Persistent driver memory reconstructed from the synchronized "
+            "prediction archive; it survives cloud restarts."
+        )
+    else:
+        st.caption(
+            "Runtime fallback memory is active until the persistent archive "
+            "becomes available."
+        )
 
 # END PROCUREYE RELEASE 42.4 DEV
 
@@ -3521,10 +3644,12 @@ def calculate_confidence_intelligence_v2(
         contradictions * 12
     )
 
-    historical_reliability = min(
-        100,
-        observations * 8
-    )
+    maturity = min(1.0, observations / 30) if observations else 0.0
+    historical_reliability = numeric(
+        historical_memory.get("predictive_accuracy", 0)
+        if isinstance(historical_memory, dict)
+        else 0
+    ) * maturity
 
     components = {
         "Base Confidence": round(base_score, 1),
@@ -3644,15 +3769,15 @@ def calculate_confidence_intelligence_v2(
 
 def render_confidence_intelligence_v2(report):
     section(
-        "Confidence Intelligence v2",
-        "Multi-factor reliability of the current market decision"
+        "Official Decision Confidence",
+        "Single multi-factor reliability measure used by the exposure gate"
     )
 
     c1, c2, c3, c4 = st.columns(4)
 
     with c1:
         st.metric(
-            "Confidence v2",
+            "Official Confidence",
             f"{int(report.get('score', 0))}%"
         )
 
@@ -4228,12 +4353,170 @@ def render_explainable_decision_v2(report):
 
 
 
-# PROCUREYE RELEASE 43.0 DEV — PREDICTIVE INTELLIGENCE
+# PROCUREYE RELEASE 47.6.5.6 DEV — ROLLING MODEL HEALTH
+
+def build_model_health(window=20):
+    empty = {
+        "status": "INSUFFICIENT DATA",
+        "samples": 0,
+        "window": window,
+        "accuracy": 0.0,
+        "baseline_accuracy": 0.0,
+        "brier": 0.0,
+        "baseline_brier": 0.0,
+        "coverage": 0.0,
+        "active_hit_rate": 0.0,
+        "active_average_return": 0.0,
+        "reason": "Waiting for at least 15 independent market days.",
+    }
+
+    if not PREDICTION_HISTORY_FILE.exists():
+        return empty
+
+    try:
+        history = pd.read_csv(PREDICTION_HISTORY_FILE)
+    except Exception:
+        return empty
+
+    required = {
+        "timestamp_utc", "prediction", "realized_state",
+        "prediction_correct", "brier_score", "market_return_pct",
+        "outcome_validated", "outcome_method",
+    }
+    if history.empty or not required.issubset(history.columns):
+        return empty
+
+    valid = history[
+        history["outcome_validated"].astype(str).str.lower()
+        .isin(["true", "1", "yes"])
+        & history["outcome_method"].astype(str).str.upper()
+        .eq("TARGET_24H_HOURLY")
+    ].copy()
+
+    valid["_ts"] = pd.to_datetime(
+        valid["timestamp_utc"], errors="coerce", utc=True
+    )
+    valid["_rome"] = valid["_ts"].dt.tz_convert("Europe/Rome")
+    valid["_date"] = valid["_rome"].dt.date
+    valid["_weekday"] = valid["_rome"].dt.weekday
+    daily = (
+        valid[valid["_weekday"] < 5]
+        .sort_values("_ts")
+        .groupby("_date", as_index=False)
+        .head(1)
+        .tail(window)
+        .copy()
+    )
+
+    if daily.empty:
+        return empty
+
+    daily["_correct"] = (
+        daily["prediction"].astype(str).str.upper()
+        == daily["realized_state"].astype(str).str.upper()
+    )
+    accuracy = float(daily["_correct"].mean() * 100)
+    brier = float(pd.to_numeric(
+        daily["brier_score"], errors="coerce"
+    ).mean())
+
+    frequencies = (
+        daily["realized_state"].astype(str).str.upper()
+        .value_counts(normalize=True)
+        .reindex(["LONG", "WAIT", "SHORT"], fill_value=0.0)
+    )
+    baseline_accuracy = float(frequencies.max() * 100)
+
+    actual = pd.get_dummies(
+        daily["realized_state"].astype(str).str.upper()
+    ).reindex(columns=["LONG", "WAIT", "SHORT"], fill_value=0)
+    baseline_vector = frequencies.to_numpy(dtype=float)
+    baseline_brier = float(
+        (((actual.to_numpy(dtype=float) - baseline_vector) ** 2).sum(axis=1) / 3).mean()
+    )
+
+    active = daily[
+        daily["prediction"].astype(str).str.upper().isin(["LONG", "SHORT"])
+    ].copy()
+    coverage = float(len(active) / len(daily) * 100)
+    active_hit = 0.0
+    average_return = 0.0
+
+    if not active.empty:
+        realized_return = pd.to_numeric(
+            active["market_return_pct"], errors="coerce"
+        ).fillna(0.0)
+        strategy_return = realized_return.where(
+            active["prediction"].astype(str).str.upper().eq("LONG"),
+            -realized_return,
+        )
+        active_hit = float((strategy_return > 0).mean() * 100)
+        average_return = float(strategy_return.mean())
+
+    samples = len(daily)
+    if samples < 15:
+        status = "INSUFFICIENT DATA"
+        reason = "Waiting for at least 15 independent market days."
+    elif accuracy + 5 < baseline_accuracy or brier > baseline_brier + 0.03:
+        status = "DEGRADED"
+        reason = (
+            "Rolling performance is below the empirical baseline. "
+            "Directional exposure is blocked until recovery."
+        )
+    elif accuracy < baseline_accuracy or brier > baseline_brier:
+        status = "WATCH"
+        reason = "Rolling performance is close to, but not above, the baseline."
+    else:
+        status = "HEALTHY"
+        reason = "Rolling accuracy and calibration are above the empirical baseline."
+
+    return {
+        "status": status,
+        "samples": samples,
+        "window": window,
+        "accuracy": round(accuracy, 1),
+        "baseline_accuracy": round(baseline_accuracy, 1),
+        "brier": round(brier, 4),
+        "baseline_brier": round(baseline_brier, 4),
+        "coverage": round(coverage, 1),
+        "active_hit_rate": round(active_hit, 1),
+        "active_average_return": round(average_return, 3),
+        "reason": reason,
+    }
+
+
+def render_model_health(report):
+    section(
+        "Rolling Model Health",
+        "Last 20 independent weekdays versus an empirical baseline"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        pe47_status_metric("Model State", report.get("status", "UNKNOWN"))
+    with c2:
+        st.metric("Rolling Accuracy", f"{report.get('accuracy', 0):.1f}%")
+    with c3:
+        st.metric("Baseline Accuracy", f"{report.get('baseline_accuracy', 0):.1f}%")
+    with c4:
+        st.metric("Rolling Brier", f"{report.get('brier', 0):.4f}")
+
+    st.info(str(report.get("reason", "")))
+    st.caption(
+        f"{int(report.get('samples', 0))} independent day(s) · "
+        f"active-signal coverage {report.get('coverage', 0):.1f}% · "
+        f"directional hit rate {report.get('active_hit_rate', 0):.1f}% · "
+        f"average uncosted signal return {report.get('active_average_return', 0):+.3f}%."
+    )
+
+
+# PROCUREYE RELEASE 47.6.5.6 DEV — PREDICTIVE INTELLIGENCE
 
 def calculate_predictive_intelligence(
     signal, score, brent, wti, risk,
     adaptive_news, driver_report,
-    correlation_report, confidence_v2
+    correlation_report, confidence_v2,
+    model_health=None
 ):
     import math
 
@@ -4332,16 +4615,69 @@ def calculate_predictive_intelligence(
 
     total = sum(raw.values())
 
-    probs = {
+    raw_probs = {
         k: 100 * v / total
         for k, v in raw.items()
     }
+
+    health_status = str(
+        (model_health or {}).get("status", "INSUFFICIENT DATA")
+    ).upper()
+    shrink = {
+        "DEGRADED": 0.45,
+        "WATCH": 0.25,
+        "INSUFFICIENT DATA": 0.30,
+        "HEALTHY": 0.10,
+    }.get(health_status, 0.30)
+    empirical = {"LONG": 50.0, "WAIT": 25.0, "SHORT": 25.0}
+    probs = {
+        key: raw_probs[key] * (1 - shrink) + empirical[key] * shrink
+        for key in raw_probs
+    }
+
+    # Guard against false precision and renormalize after calibration.
+    probs = {key: max(5.0, min(90.0, value)) for key, value in probs.items()}
+    calibrated_total = sum(probs.values())
+    probs = {key: 100 * value / calibrated_total for key, value in probs.items()}
 
     prediction = max(probs, key=probs.get)
 
     ordered = sorted(probs.values(), reverse=True)
     spread = ordered[0] - ordered[1]
     probability = probs[prediction]
+
+    mean_momentum = (bm + wm) / 2
+    decision = "WAIT"
+    decision_reason = "Directional evidence does not meet the exposure gate."
+
+    if health_status == "DEGRADED":
+        decision_reason = "Rolling model health is DEGRADED; exposure is blocked."
+    elif str(risk).upper() == "HIGH":
+        decision_reason = "HIGH market risk blocks new directional exposure."
+    elif confidence < 45:
+        decision_reason = "Official confidence is below 45%."
+    elif contradictions >= 1 and align < 55:
+        decision_reason = "Conflicting drivers and weak alignment require abstention."
+    elif (
+        prediction == "LONG"
+        and mean_momentum > 0
+        and (bt > 0 or wt > 0)
+        and confidence >= 45
+    ):
+        decision = "LONG"
+        decision_reason = "Calibrated upward forecast passed momentum and confidence gates."
+    elif (
+        prediction == "SHORT"
+        and bt < 0 and wt < 0
+        and mean_momentum < 0
+        and dd < 0
+        and align >= 65
+        and confidence >= 55
+    ):
+        decision = "SHORT"
+        decision_reason = "Downward forecast passed dual-trend, driver and confidence gates."
+    elif prediction == "SHORT":
+        decision_reason = "SHORT requires both crude trends, momentum and drivers to agree."
 
     conviction = (
         "HIGH"
@@ -4352,7 +4688,10 @@ def calculate_predictive_intelligence(
     )
 
     table = pd.DataFrame([
-        {"State": k, "Probability": round(v, 1)}
+        {
+            "State": {"LONG": "UP", "WAIT": "FLAT", "SHORT": "DOWN"}.get(k, k),
+            "Probability": round(v, 1),
+        }
         for k, v in probs.items()
     ]).sort_values(
         "Probability",
@@ -4361,12 +4700,19 @@ def calculate_predictive_intelligence(
 
     return {
         "prediction": prediction,
+        "forecast_state": {
+            "LONG": "UP", "WAIT": "FLAT", "SHORT": "DOWN"
+        }.get(prediction, "FLAT"),
+        "decision": decision,
+        "decision_reason": decision_reason,
         "probability": round(probability, 1),
         "long": round(probs["LONG"], 1),
         "wait": round(probs["WAIT"], 1),
         "short": round(probs["SHORT"], 1),
         "spread": round(spread, 1),
         "conviction": conviction,
+        "health_status": health_status,
+        "calibration_shrink": round(shrink * 100, 1),
         "pressure": round(pressure, 3),
         "uncertainty": round(uncertainty, 3),
         "table": table
@@ -4377,15 +4723,15 @@ def render_predictive_intelligence(report):
 
     section(
         "Predictive Intelligence",
-        "Live probability distribution for LONG, WAIT and SHORT"
+        "Calibrated market-state forecast separated from the operating decision"
     )
 
     a, b, c, d = st.columns(4)
 
     with a:
         pe47_status_metric(
-            "Prediction",
-            report["prediction"]
+            "Market Forecast",
+            report.get("forecast_state", "FLAT")
         )
 
     with b:
@@ -4395,7 +4741,7 @@ def render_predictive_intelligence(report):
         )
 
     with c:
-        st.metric("Conviction", report["conviction"])
+        pe47_status_metric("Decision", report.get("decision", "WAIT"))
 
     with d:
         st.metric(
@@ -4418,15 +4764,19 @@ def render_predictive_intelligence(report):
     )
 
     st.info(
-        f"LONG {report['long']:.1f}% · "
-        f"WAIT {report['wait']:.1f}% · "
-        f"SHORT {report['short']:.1f}%"
+        f"UP {report['long']:.1f}% · "
+        f"FLAT {report['wait']:.1f}% · "
+        f"DOWN {report['short']:.1f}%"
     )
 
+    st.warning(str(report.get("decision_reason", "")))
+
     st.caption(
-        "Recalculated on every refresh from market price, "
+        f"Probabilities are shrunk {report.get('calibration_shrink', 0):.0f}% "
+        "toward empirical base rates. Recalculated from market price, "
         "trend, momentum, current news, drivers, "
-        "correlation, risk and Confidence v2."
+        "correlation, risk, official confidence and rolling model health. "
+        "WAIT is an abstention; FLAT is the neutral market forecast."
     )
 
 # END PROCUREYE RELEASE 43.0 DEV
@@ -5056,7 +5406,7 @@ def render_driver_forecast(report):
 
 
 # ============================================================
-# PROCUREYE Release 47.6.5.5 DEV
+# PROCUREYE Release 47.6.5.6 DEV
 # PERSISTENT OUTCOME MEMORY — GITHUB GIST
 # ============================================================
 
@@ -5362,7 +5712,7 @@ def record_prediction_archive(
 
     row = {
         "timestamp_utc": now.isoformat(),
-        "release": "46.0",
+        "release": "47.6.5.6",
 
         "signal": clean(signal),
         "market_score": int(num(score)),
@@ -5378,6 +5728,22 @@ def record_prediction_archive(
 
         "prediction": str(
             predictive.get("prediction", "WAIT")
+        ),
+
+        "forecast_state": str(
+            predictive.get("forecast_state", "FLAT")
+        ),
+
+        "decision": str(
+            predictive.get("decision", "WAIT")
+        ),
+
+        "model_health": str(
+            predictive.get("health_status", "UNKNOWN")
+        ),
+
+        "calibration_shrink_pct": num(
+            predictive.get("calibration_shrink", 0)
         ),
 
         "long_probability": num(
@@ -5494,7 +5860,13 @@ def record_prediction_archive(
                     != row["forecast_driver"],
 
                 int(num(last.get("market_score")))
-                    != row["market_score"]
+                    != row["market_score"],
+
+                str(last.get("decision", "WAIT"))
+                    != row["decision"],
+
+                str(last.get("model_health", "UNKNOWN"))
+                    != row["model_health"],
             ])
 
             store = (
@@ -5926,7 +6298,7 @@ def render_outcome_validation(report):
 
 
 # ============================================================
-# PROCUREYE RELEASE 47.6.5.5 DEV — DAILY PREDICTION AUDIT
+# PROCUREYE RELEASE 47.6.5.6 DEV — DAILY PREDICTION AUDIT
 # ============================================================
 
 MORNING_WINDOW_START = 8
@@ -6259,6 +6631,9 @@ def render_prediction_audit_log():
         "Time Rome": timestamps.dt.strftime("%H:%M"),
         "Morning": history.get("morning_candidate", False),
         "Prediction": history.get("prediction", "WAIT"),
+        "Forecast": history.get("forecast_state", ""),
+        "Decision": history.get("decision", ""),
+        "Model Health": history.get("model_health", ""),
         "Probability %": pd.to_numeric(
             history.get("prediction_probability"),
             errors="coerce"
@@ -6368,7 +6743,7 @@ def render_prediction_audit_log():
     )
 
 
-# END PROCUREYE RELEASE 47.6.5.5 DAILY PREDICTION AUDIT
+# END PROCUREYE RELEASE 47.6.5.6 DAILY PREDICTION AUDIT
 
 
 # ============================================================
@@ -6735,8 +7110,8 @@ def render_learning_statistics(report):
         )
 
     st.caption(
-        "Learning Statistics measures historical performance only. "
-        "Release 46.2 does not modify Predictive Intelligence weights."
+        "Historical observations feed Rolling Model Health and probability "
+        "calibration. They never change model weights automatically."
     )
 
 # END PROCUREYE RELEASE 46.2 DEV
@@ -7195,7 +7570,7 @@ st.markdown("""
 <section class="pe-hero">
   <div class="pe-top">
     <div class="pe-brand">PROCUREYE</div>
-    <div class="pe-release">Release 47.6.5.5 DEV
+    <div class="pe-release">Release 47.6.5.6 DEV
   </div>
   <div class="pe-title">Crude Oil Market Intelligence Platform</div>
   <div class="pe-copy">
@@ -7524,6 +7899,34 @@ def fallback_signal(brent, wti, news_score=0):
 
     return signal, score, confidence
 
+
+def classify_market_regime(brent, wti, risk):
+    """Classify the observable price regime instead of defaulting to TRANSITION."""
+    bt = str(brent.get("trend", "UNKNOWN")).upper()
+    wt = str(wti.get("trend", "UNKNOWN")).upper()
+
+    try:
+        momentum = (
+            float(brent.get("momentum", 0) or 0)
+            + float(wti.get("momentum", 0) or 0)
+        ) / 2
+    except Exception:
+        momentum = 0.0
+
+    if str(risk).upper() == "HIGH" and bt != wt:
+        return "HIGH_VOLATILITY"
+
+    if bt == wt == "BULLISH":
+        return "TRENDING_BULL" if momentum >= 0.75 else "CONSOLIDATION"
+
+    if bt == wt == "BEARISH":
+        return "TRENDING_BEAR" if momentum <= -0.75 else "CONSOLIDATION"
+
+    if abs(momentum) < 0.50:
+        return "RANGE"
+
+    return "TRANSITION"
+
 def existing_engine_signal(brent_df, wti_df, fallback, news_score=0):
     try:
         from procureye_signal_engine_v22 import calculate_signal
@@ -7696,7 +8099,11 @@ def run_procureye_dashboard():
         else "LOW"
     )
 
-    provisional_regime = "TRANSITION"
+    provisional_regime = classify_market_regime(
+        brent=brent,
+        wti=wti,
+        risk=risk,
+    )
 
     provisional_fallback = fallback_signal(
         brent,
@@ -7738,6 +8145,9 @@ def run_procureye_dashboard():
         else provisional_regime
     )
 
+    if str(regime).upper() in {"", "UNKNOWN", "TRANSITION"}:
+        regime = provisional_regime
+
     confidence_engine = calculate_confidence_engine(
         brent=brent,
         wti=wti,
@@ -7777,7 +8187,7 @@ def run_procureye_dashboard():
     q1, q2, q3, q4 = st.columns(4)
 
     with q1:
-        pe47_status_metric("Signal", signal)
+        pe47_status_metric("Preliminary Signal", signal)
 
     with q2:
         st.metric(
@@ -7787,7 +8197,7 @@ def run_procureye_dashboard():
 
     with q3:
         st.metric(
-            "Signal Confidence",
+            "Legacy Confidence",
             confidence
         )
 
@@ -7832,13 +8242,13 @@ def run_procureye_dashboard():
         )
 
     with c3:
-        pe47_status_metric("Signal", signal)
+        pe47_status_metric("Preliminary Signal", signal)
 
     with c4:
         st.metric("Market Score", f"{score}/100")
 
     with c5:
-        st.metric("Signal Confidence", confidence)
+        st.metric("Legacy Confidence", confidence)
 
     with c6:
         st.metric("Risk", risk)
@@ -8000,6 +8410,10 @@ def run_procureye_dashboard():
         driver_correlation
     )
 
+    # Load persistent observations before building historical memory and
+    # rolling health. The same status object is reused for the later save.
+    persistent_load_status = load_prediction_history_from_gist()
+
     record_historical_driver_memory(
         driver_report=driver_intelligence,
         correlation_report=driver_correlation,
@@ -8016,6 +8430,9 @@ def run_procureye_dashboard():
     render_historical_driver_memory(
         historical_driver_memory
     )
+
+    model_health = build_model_health(window=20)
+    render_model_health(model_health)
 
     confidence_intelligence_v2 = calculate_confidence_intelligence_v2(
         base_confidence=confidence_engine,
@@ -8060,7 +8477,8 @@ def run_procureye_dashboard():
         adaptive_news=adaptive_news,
         driver_report=driver_intelligence,
         correlation_report=driver_correlation,
-        confidence_v2=confidence_intelligence_v2
+        confidence_v2=confidence_intelligence_v2,
+        model_health=model_health,
     )
 
     pe47_anchor("predictive")
@@ -8092,10 +8510,6 @@ def run_procureye_dashboard():
     )
 
     render_driver_forecast(driver_forecast)
-
-    persistent_load_status = (
-        load_prediction_history_from_gist()
-    )
 
     prediction_archive_status = record_prediction_archive(
         predictive=predictive_intelligence,
@@ -8235,7 +8649,7 @@ def run_procureye_dashboard():
     )
 
 
-    section("System State", "Release 39 operating status")
+    section("System State", "Release 47.6.5.6 DEV operating status")
 
     s1, s2, s3, s4 = st.columns(4)
 
@@ -8243,7 +8657,7 @@ def run_procureye_dashboard():
         st.metric("Agent State", "CONTROLLED")
 
     with s2:
-        st.metric("Learning State", "ACTIVE")
+        st.metric("Learning State", "OBSERVATIONAL")
 
     with s3:
         pe47_compact_metric(
